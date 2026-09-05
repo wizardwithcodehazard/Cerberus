@@ -1,0 +1,39 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C / C++ build artifacts
+*.exe
+*.obj
+*.o
+*.dll
+*.so
+*.dylib
+scratch/
+temp_bench*
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv/
+
+# IDE & Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Testing & Cache
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Temporary / Scratch artifacts
+.system_generated/
+chat_export.md
+segfault.txt
+ps4.txt
+markovlens.docx
+markovlens.pdf
