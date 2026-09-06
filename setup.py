@@ -1,7 +1,7 @@
 from setuptools import setup, find_packages
 
 setup(
-    name="markovlens",
+    name="cerberus-compiler",
     version="0.1.0",
     description="Explainable ML-Guided GPU Offload Profitability Predictor for C/C++ Loops and OpenMP Target Directives",
     author="Team seeplusplus",
@@ -17,8 +17,8 @@ setup(
     ],
     entry_points={
         "console_scripts": [
-            "cerberus = markovlens.cli:main",
-            "markovlens = markovlens.cli:main"
+            "cerberus = cerberus.cli:main",
+            "markovlens = cerberus.cli:main"
         ]
     },
     python_requires=">=3.9",

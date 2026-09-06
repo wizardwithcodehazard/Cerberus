@@ -1,9 +1,9 @@
 """Test ML Cost Model & TreeSHAP Explainability."""
 
 import os
-from markovlens.parser import CLoopParser
-from markovlens.hardware import PRESET_PROFILES
-from markovlens.model import ProfitabilityModel
+from cerberus.parser import CLoopParser
+from cerberus.hardware import PRESET_PROFILES
+from cerberus.model import ProfitabilityModel
 
 def test_profitability_predictions():
     test_file = os.path.join(os.path.dirname(__file__), "..", "benchmarks", "synthetic", "sample_loops.c")

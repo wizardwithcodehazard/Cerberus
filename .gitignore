@@ -13,6 +13,12 @@ __pycache__/
 scratch/
 temp_bench*
 
+# Python Package & Build artifacts
+build/
+dist/
+*.egg-info/
+cerberus_compiler.egg-info/
+
 # Virtual Environment
 venv/
 env/
@@ -37,3 +43,4 @@ segfault.txt
 ps4.txt
 markovlens.docx
 markovlens.pdf
+

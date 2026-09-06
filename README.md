@@ -57,11 +57,12 @@ Like the three-headed guardian of myth, **Cerberus** guards the GPU boundary by 
 
 ## Key Features
 
-* **AST Loop & Dependency Analysis:** Statically checks loops for loop-carried data hazards, calculating memory footprint, spatial/temporal data reuse ratios, SIMD coalescing scores, and arithmetic intensity (FLOPs / Byte).
-* **Neuro-Symbolic Cost Modeling:** Combines classical Williams Roofline theoretical bounds with a gradient-boosted XGBoost regressor to predict wall-clock speedup (T_CPU / T_GPU).
-* **TreeSHAP Feature Attribution:** Converts mathematical penalties (PCIe bus bottleneck, warp divergence, launch latency) into human-readable compiler explanations.
-* **Cross-Architecture Hardware Sensitivity:** Distinguishes between Discrete GPUs over PCIe (e.g. NVIDIA RTX), Integrated GPUs on Unified Memory (e.g. AMD Radeon 680M / Intel Iris), and External GPUs over Thunderbolt.
-* **OpenMP Target Offload Pragma Injection:** Automatically generates `#pragma omp target teams distribute parallel for` with `map(to:)`, `map(from:)`, and `reduction(...)` clauses.
+* **AST Loop & Dependency Analysis:** Statically checks loops for loop-carried data hazards, calculating memory footprint, spatial/temporal data reuse ratios, SIMD coalescing scores, and arithmetic intensity (FLOPs / Byte). Handles `#define` macros, `constexpr` constants, array precision scaling (`double`/`float`/`char`), domain tensor dimensions, and `while` loops.
+* **Neuro-Symbolic Cost Modeling:** Combines classical Williams Roofline theoretical bounds with a gradient-boosted XGBoost regressor trained on 1,055 heterogeneous physical GPU runs with **95% Confidence Interval** uncertainty estimation.
+* **TreeSHAP Feature Attribution:** Converts mathematical penalties (PCIe bus bottleneck, warp divergence, launch latency) into human-readable compiler explanations with local SHAP force contributions.
+* **50+ GPU Silicon Database & Discovery:** Built-in hardware database (NVIDIA RTX 20/30/40/50, AMD RX 5000/6000/7000, Intel Arc/Iris) with automatic OpenCL + WMI micro-architectural discovery and live host CPU ISA detection (AVX2/AVX-512).
+* **Multi-Target Pragma Generation (OpenMP & OpenACC):** Automatically generates `#pragma omp target teams distribute parallel for` or `#pragma acc parallel loop` with `map(to:)`, `copyin()`, `copyout()`, `reduction(...)`, and `[0:N]` array section bounds.
+* **Smart Test Harness Filtering:** Automatically isolates production compute kernels from test validation suites (`validate_*`, `check_*`, `main()`), with `--include-tests` override.
 
 ---
 
@@ -83,42 +84,80 @@ pip install -e .
 
 ---
 
-## Usage
+## CLI Reference & Usage
 
-### 1. All-In-One Command (Analyze + Gate + Transform):
+### 1. Interactive Gating & Diagnostic Triage
 ```bash
-cerberus kernel.c -o kernel_opt.c
+# Launch interactive analysis on candidate source code:
+python -m cerberus.cli benchmarks/synthetic/test1.cpp
 ```
 
-### 2. Deep Explainability Mode (--explain):
+### 2. Automated Non-Interactive Batch Mode (`--batch`)
 ```bash
-cerberus kernel.c -o kernel_opt.c --explain
+# Scan, inject OpenMP offload pragmas, generate optimization report, and exit:
+python -m cerberus.cli benchmarks/synthetic/test1.cpp --batch -o test1_offloaded.cpp
 ```
 
-### 3. Simulate Cross-Hardware Targets (--target):
+### 3. OpenACC Directive Generation (`--format openacc`)
 ```bash
-# Simulate on Discrete NVIDIA RTX 4090
-cerberus kernel.c -t dgpu_rtx4090
+# Generate OpenACC 2.7+ parallel loop directives:
+python -m cerberus.cli benchmarks/synthetic/test1.cpp --format openacc --batch -o test1_acc.cpp
+```
 
-# Simulate on Integrated AMD / Intel iGPU (Zero-Copy)
-cerberus kernel.c -t igpu_amd_radeon
+### 4. CI/CD Machine-Readable JSON Output (`--json`)
+```bash
+# Export full loop features, Roofline bounds, TreeSHAP values, and predictions as JSON:
+python -m cerberus.cli benchmarks/synthetic/test1.cpp --json --target dgpu_rtx3060
+```
 
-# Simulate on External Thunderbolt eGPU
-cerberus kernel.c -t egpu_thunderbolt
+### 5. Cross-Target Hardware Simulation (`-t` / `--target`)
+```bash
+# List all preset hardware profiles:
+python -m cerberus.cli --list-targets
+
+# Simulate on Discrete NVIDIA RTX 4090:
+python -m cerberus.cli benchmarks/synthetic/test1.cpp -t dgpu_rtx4090 --batch
+
+# Simulate on Integrated AMD RDNA2 iGPU (Zero-Copy Shared Memory):
+python -m cerberus.cli benchmarks/synthetic/test1.cpp -t igpu_amd_radeon --batch
+
+# Simulate on External Thunderbolt eGPU:
+python -m cerberus.cli benchmarks/synthetic/test1.cpp -t egpu_thunderbolt --batch
+```
+
+### 6. Parametric Workload Scaling & Crossover Curve (`--sweep`)
+```bash
+# Display CPU-to-GPU speedup crossover across problem sizes N=100 to 10M:
+python -m cerberus.cli benchmarks/synthetic/test1.cpp --sweep
+
+# Custom sweep range:
+python -m cerberus.cli benchmarks/synthetic/test1.cpp --sweep --sweep-range 512 1048576
+```
+
+### 7. Deep Explainability & Single-Loop Audit (`--explain`, `--audit`)
+```bash
+# Print TreeSHAP attribution factor breakdown for all loops:
+python -m cerberus.cli benchmarks/synthetic/test1.cpp --explain
+
+# Deep micro-architectural audit panel for a specific loop index:
+python -m cerberus.cli benchmarks/synthetic/test1.cpp --audit 1
 ```
 
 ---
 
-## Physical Hardware Benchmarking
+## Physical Hardware Benchmarking & Training
 
-Cerberus is trained on real physical GPU silicon using a zero-dependency native OpenCL engine:
+Cerberus is trained on physical GPU silicon runs using a native OpenCL engine:
 
 ```bash
-# Run real physical hardware benchmark collection on your machine:
+# 1. Collect empirical micro-benchmarking data on local silicon:
 python -m scripts.collect_data
 
-# Train the ML cost model with 5-Fold Cross-Validation:
+# 2. Train the XGBoost cost model with 5-Fold Stratified Cross-Validation:
 python -m scripts.train_model
+
+# 3. Run full test suite:
+pytest tests/ -v
 ```
 
 ---

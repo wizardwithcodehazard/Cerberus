@@ -1,7 +1,7 @@
 """Test AST Loop Feature Extractor."""
 
 import os
-from markovlens.parser import CLoopParser
+from cerberus.parser import CLoopParser
 
 def test_parse_sample_loops():
     test_file = os.path.join(os.path.dirname(__file__), "..", "benchmarks", "synthetic", "sample_loops.c")
@@ -39,7 +39,43 @@ def test_parse_sample_loops():
     print(f"Branch Divergence Count: {l3.branch_divergence_count}")
     assert l3.branch_divergence_count >= 1
 
-    print("\n[SUCCESS] All parser tests passed cleanly!")
+    print("\n[SUCCESS] All sample loop parser tests passed cleanly!")
+
+def test_macro_and_while_loop_parsing():
+    source = """
+    #define N 2048
+    #define BLOCK_SIZE (64 * 4)
+
+    void test_macro_loop(double* A, double* B, double* C) {
+        for (int i = 0; i < N; i++) {
+            C[i] = A[i] + B[i] * 2.0;
+        }
+    }
+
+    void test_while_loop(float* x, float* y) {
+        int idx = 0;
+        while (idx < 5000) {
+            y[idx] = x[idx] * 3.14f;
+            idx++;
+        }
+    }
+    """
+    parser = CLoopParser()
+    loops = parser.parse_source(source)
+    assert len(loops) == 2, f"Expected 2 loops, got {len(loops)}"
+
+    # Check macro expansion
+    l1 = loops[0]
+    assert l1.trip_count == 2048, f"Expected 2048 trip count from #define, got {l1.trip_count}"
+    # Double precision is 8 bytes per element: 3 arrays * 2048 elems * 8 bytes = 49,152 bytes
+    assert l1.memory_footprint_bytes >= 49152, f"Expected >= 49152 bytes for double array, got {l1.memory_footprint_bytes}"
+
+    # Check while loop
+    l2 = loops[1]
+    assert l2.trip_count == 5000, f"Expected 5000 trip count for while loop, got {l2.trip_count}"
+    assert l2.is_parallel_safe, "Expected while loop to be parallel safe"
 
 if __name__ == "__main__":
     test_parse_sample_loops()
+    test_macro_and_while_loop_parsing()
+

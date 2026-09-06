@@ -1,6 +1,6 @@
 """Test Loop-Carried Dependency & Safety Analysis."""
 
-from markovlens.parser import CLoopParser
+from cerberus.parser import CLoopParser
 
 def test_parallel_safety_analysis():
     parser = CLoopParser()

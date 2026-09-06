@@ -17,8 +17,8 @@ from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn
 
 from benchmarks.suite import BENCHMARK_SUITE, BenchmarkKernel
-from markovlens.parser import CLoopParser
-from markovlens.hardware import detect_local_hardware, PRESET_PROFILES, HardwareProfile
+from cerberus.parser import CLoopParser
+from cerberus.hardware import detect_local_hardware, PRESET_PROFILES, HardwareProfile
 
 console = Console()
 
@@ -175,10 +175,10 @@ def compile_and_run(c_code: str, compiler_flags: List[str]) -> float:
 
     return -1.0
 
-from markovlens.opencl_runner import OpenCLEngine, GPUExecutionProfile
+from cerberus.opencl_runner import OpenCLEngine, GPUExecutionProfile
 
 def collect_dataset(target_profile: HardwareProfile, output_csv: str = "dataset.csv"):
-    console.print(f"[bold cyan]MarkovLens Real Hardware Benchmarking Engine[/bold cyan]")
+    console.print(f"[bold cyan]Cerberus Real Hardware Benchmarking Engine[/bold cyan]")
     
     # Initialize real physical GPU OpenCL engine
     opencl_engine = None

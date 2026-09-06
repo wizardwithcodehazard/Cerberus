@@ -1,4 +1,4 @@
-# MarkovLens Core Dependencies
+# Cerberus Core Dependencies
 click>=8.1.7
 rich>=13.7.0
 numpy>=1.26.0
@@ -6,5 +6,3 @@ pandas>=2.1.0
 scikit-learn>=1.4.0
 xgboost>=2.0.0
 shap>=0.44.0
-setuptools>=69.0.0
-pytest>=7.4.0
