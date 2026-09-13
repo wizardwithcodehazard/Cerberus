@@ -640,3 +640,34 @@ class CLoopParser:
             return max(1, (stop_val - start_val + (step_val - 1)) // step_val)
 
         return self.default_param_trip_count
+
+
+def get_ast_parser(
+    backend: str = "auto",
+    default_param_trip_count: int = DEFAULT_TRIP_COUNT,
+    bytes_per_elem: int = 4,
+    params: Optional[Dict[str, int]] = None,
+    include_tests: bool = False,
+):
+    """Factory creating either ClangASTParser (LLVM libclang) or CLoopParser (native fast)."""
+    if backend in ("clang", "auto"):
+        try:
+            from cerberus.clang_parser import ClangASTParser
+            return ClangASTParser(
+                default_param_trip_count=default_param_trip_count,
+                bytes_per_elem=bytes_per_elem,
+                params=params,
+                include_tests=include_tests,
+            )
+        except (ImportError, Exception):
+            if backend == "clang":
+                raise ImportError(
+                    "libclang Python package not found. Run 'pip install libclang' to enable Clang LibTooling AST."
+                )
+    
+    return CLoopParser(
+        default_param_trip_count=default_param_trip_count,
+        bytes_per_elem=bytes_per_elem,
+        params=params,
+        include_tests=include_tests,
+    )

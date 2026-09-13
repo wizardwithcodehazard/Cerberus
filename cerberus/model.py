@@ -99,6 +99,16 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     
     return df_feat[FEATURE_NAMES]
 
+# Monotonic Physics Constraints: Immutably enforced physical laws
+MONOTONIC_CONSTRAINTS = {
+    "total_flops": 1,                   # Higher compute -> speedup cannot decrease
+    "trip_count": 1,                    # Higher iterations -> speedup cannot decrease
+    "transfer_to_compute_ratio": -1,    # Higher transfer overhead -> speedup cannot increase
+    "roofline_attainable_gflops": 1,    # Higher roofline ceiling -> speedup cannot decrease
+    "data_reuse_ratio": 1,              # Higher cache reuse -> speedup cannot decrease
+    "branch_divergence_count": -1,      # Higher branch divergence -> speedup cannot increase
+}
+
 @dataclass
 class RooflineBound:
     peak_gflops: float
@@ -122,10 +132,12 @@ class PredictionResult:
 
 
 class ProfitabilityModel:
-    """Neuro-symbolic profitability predictor combining Williams Roofline Model with XGBoost."""
+    """Two-Stage Neuro-Symbolic Hurdle Model combining Roofline bounds, XGBoost Classifier, and XGBoost Regressor."""
 
     def __init__(self, model_path: Optional[str] = None):
         self.model: Optional[xgb.XGBRegressor] = None
+        self.regressor: Optional[xgb.XGBRegressor] = None
+        self.classifier: Optional[xgb.XGBClassifier] = None
         self.explainer: Optional[shap.TreeExplainer] = None
         self.model_path = model_path
         self.metadata: Dict[str, Any] = {}
@@ -159,7 +171,7 @@ class ProfitabilityModel:
         )
 
     def _init_bootstrap_model(self):
-        """Initializes a physically grounded pre-trained XGBoost cost model."""
+        """Initializes a physically grounded pre-trained two-stage XGBoost cost model."""
         np.random.seed(42)
         base_rows = []
         targets = []
@@ -230,15 +242,30 @@ class ProfitabilityModel:
         df_base = pd.DataFrame(base_rows, columns=BASE_FEATURE_NAMES)
         X = engineer_features(df_base)
         y = np.array(targets)
+        y_class = (y >= math.log2(1.05)).astype(int)
 
-        self.model = xgb.XGBRegressor(
+        # Stage 1: Classifier
+        self.classifier = xgb.XGBClassifier(
+            n_estimators=120,
+            max_depth=5,
+            learning_rate=0.08,
+            monotone_constraints=MONOTONIC_CONSTRAINTS,
+            random_state=42
+        )
+        self.classifier.fit(X, y_class)
+
+        # Stage 2: Constrained Regressor
+        self.regressor = xgb.XGBRegressor(
             n_estimators=150,
             max_depth=6,
             learning_rate=0.08,
+            monotone_constraints=MONOTONIC_CONSTRAINTS,
             random_state=42
         )
-        self.model.fit(X, y)
-        self.explainer = shap.TreeExplainer(self.model)
+        self.regressor.fit(X, y)
+        self.model = self.regressor # Backward compatibility
+
+        self.explainer = shap.TreeExplainer(self.regressor)
         self.metadata = dict(BOOTSTRAP_METADATA)
         self.metadata["n_samples"] = len(base_rows)
 
@@ -259,7 +286,7 @@ class ProfitabilityModel:
                 shap_values={"is_parallel_safe": -10.0}
             )
 
-        # 2. ML Prediction
+        # 2. ML Prediction (Two-Stage Hurdle Architecture)
         feature_vector = loop.to_feature_vector() + [
             float(hw.type_code),
             float(hw.bus_bandwidth_gbps),
@@ -269,10 +296,23 @@ class ProfitabilityModel:
 
         df_base = pd.DataFrame([feature_vector], columns=BASE_FEATURE_NAMES)
         X_sample = engineer_features(df_base)
-        log_speedup_pred = float(self.model.predict(X_sample)[0])
+
+        # Stage 1: Classifier gating
+        if self.classifier is not None:
+            prob_profitable = float(self.classifier.predict_proba(X_sample)[0][1])
+            is_profitable = prob_profitable >= 0.5
+        else:
+            prob_profitable = None
+
+        # Stage 2: Constrained Regressor speedup estimation
+        reg_model = self.regressor if self.regressor is not None else self.model
+        log_speedup_pred = float(reg_model.predict(X_sample)[0])
         predicted_speedup = 2.0 ** log_speedup_pred
 
-        is_profitable = predicted_speedup >= speedup_threshold
+        if prob_profitable is None:
+            is_profitable = predicted_speedup >= speedup_threshold
+        elif is_profitable and predicted_speedup < speedup_threshold:
+            is_profitable = False
 
         # Model Uncertainty: 95% Confidence Interval (1.96 * log2 RMSE)
         rmse = self.metadata.get("rmse", 0.285)
@@ -328,14 +368,18 @@ class ProfitabilityModel:
     def save(self, filepath: str):
         with open(filepath, 'wb') as f:
             pickle.dump({
-                "model": self.model,
+                "classifier": self.classifier,
+                "regressor": self.regressor,
+                "model": self.regressor if self.regressor is not None else self.model,
                 "metadata": self.metadata
             }, f)
 
     def load(self, filepath: str):
         with open(filepath, 'rb') as f:
             data = pickle.load(f)
-            self.model = data["model"]
+            self.classifier = data.get("classifier")
+            self.regressor = data.get("regressor", data.get("model"))
+            self.model = self.regressor
             self.metadata = data.get("metadata", {})
             if not self.metadata:
                 import logging
@@ -344,5 +388,5 @@ class ProfitabilityModel:
                     "Retrain with scripts/train_model.py for accurate stats.", filepath
                 )
                 self.metadata = {"is_stale": True}
-            self.explainer = shap.TreeExplainer(self.model)
+            self.explainer = shap.TreeExplainer(self.regressor)
 

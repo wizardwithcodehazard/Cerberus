@@ -10,7 +10,7 @@
 //    Dense matrix multiplication with high arithmetic intensity
 // ============================================================
 void matrix_multiply(float* A, float* B, float* C, int N) {
-#pragma omp target teams distribute parallel for map(to: A[0:N], B[0:N]) map(tofrom: C[0:N])
+#pragma omp target teams distribute parallel for if(N >= 64) map(to: A[0:N], B[0:N]) map(tofrom: C[0:N])
     for (int i = 0; i < N; ++i) {
         for (int k = 0; k < N; ++k) {
             float aik = A[i * N + k];
@@ -38,6 +38,7 @@ float parallel_reduction(const float* data, int N) {
 //    O(N²) pairwise interactions with sqrt operations
 // ============================================================
 void nbody_update(float* pos_x, float* pos_y, float* vel_x, float* vel_y, int N, float dt) {
+#pragma omp target teams distribute parallel for if(N >= 4096) map(to: pos_x[0:N], pos_y[0:N]) map(tofrom: vel_x[0:N], vel_y[0:N])
     for (int i = 0; i < N; ++i) {
         float fx = 0, fy = 0;
         for (int j = 0; j < N; ++j) {
@@ -60,7 +61,6 @@ void nbody_update(float* pos_x, float* pos_y, float* vel_x, float* vel_y, int N,
 // ============================================================
 void stencil_2d_convolution(float* input, float* output, int width, int height) {
     float kernel[3][3] = {{1,2,1},{2,4,2},{1,2,1}};
-#pragma omp target teams distribute parallel for map(to: input, kernel) map(tofrom: output)
     for (int y = 1; y < height-1; ++y) {
         for (int x = 1; x < width-1; ++x) {
             float val = 0;
@@ -79,7 +79,7 @@ void stencil_2d_convolution(float* input, float* output, int width, int height) 
 //    Cooley-Tukey FFT with complex arithmetic
 // ============================================================
 void fft(float* real, float* imag, int N) {
-#pragma omp target teams distribute parallel for map(tofrom: imag[0:N], real[0:N])
+#pragma omp target teams distribute parallel for if(N >= 64) map(tofrom: imag[0:N], real[0:N])
     for (int len = 2; len <= N; len <<= 1) {
         float ang = 2.0f * 3.14159265359f / len;
         float wreal = cos(ang), wimag = sin(ang);
@@ -194,7 +194,6 @@ void conv_layer_forward(float* input, float* weights, float* bias, float* output
 //     Bank conflict heavy memory access pattern
 // ============================================================
 void matrix_transpose(float* input, float* output, int rows, int cols) {
-#pragma omp target teams distribute parallel for map(to: input[0:rows]) map(tofrom: output[0:rows])
     for (int i = 0; i < rows; ++i) {
         for (int j = 0; j < cols; ++j) {
             output[j * rows + i] = input[i * cols + j];

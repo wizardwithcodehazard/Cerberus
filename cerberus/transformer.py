@@ -1,6 +1,7 @@
 """Multi-Dialect GPU Offload Pragma Transformer (OpenMP 4.5+ & OpenACC)."""
 
 import re
+import copy
 from typing import List, Tuple, Optional
 from cerberus.parser import LoopFeature, CLoopParser
 from cerberus.model import PredictionResult, ProfitabilityModel
@@ -39,6 +40,46 @@ class GPUPragmaTransformer:
         decisions.reverse() # Restore original top-to-bottom order
         return transformed_code, decisions
 
+    def find_crossover_threshold(self, loop: LoopFeature) -> Optional[int]:
+        """Calculates the minimum problem size N where GPU offloading becomes profitable (Speedup >= 1.05x)."""
+        test_sizes = [32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 1048576]
+        
+        for sz in test_sizes:
+            scaled = copy.copy(loop)
+            if loop.nesting_depth >= 3:
+                effective_trips = sz * sz * sz
+                unique_mem = 3 * (sz * sz)
+                scaled.data_reuse_ratio = float(sz)
+            elif loop.nesting_depth == 2:
+                effective_trips = sz * sz
+                unique_mem = max(1, len(loop.arrays_read | loop.arrays_written)) * (sz * sz)
+                scaled.data_reuse_ratio = 2.0
+            else:
+                effective_trips = sz
+                unique_mem = max(1, len(loop.arrays_read | loop.arrays_written)) * sz
+                scaled.data_reuse_ratio = 1.0
+
+            scaled.trip_count = effective_trips
+            scaled.total_flops = max(1, effective_trips * scaled.flops_per_iter)
+            scaled.memory_footprint_bytes = max(1024, unique_mem * 4) # 4 bytes per float
+            scaled.arithmetic_intensity = scaled.total_flops / float(scaled.memory_footprint_bytes)
+
+            pred = self.model.predict_loop(scaled, self.target_hw, speedup_threshold=1.05)
+            if pred.is_profitable:
+                return sz
+
+        return None
+
+    def _get_dynamic_bound_var(self, loop: LoopFeature) -> Optional[str]:
+        """Extracts dynamic variable bound from loop header (e.g. 'N' in 'for (int i = 0; i < N; ++i)')."""
+        bound_match = re.search(r'for\s*\([^;]*;\s*\w+\s*<\s*([a-zA-Z_]\w*)\s*;', loop.source_code)
+        if bound_match:
+            var_name = bound_match.group(1)
+            # If it's a variable identifier (not a pure number), it is a dynamic runtime bound
+            if not var_name.isdigit():
+                return var_name
+        return None
+
     def _generate_pragma(self, loop: LoopFeature) -> str:
         """Generates appropriate OpenMP or OpenACC target offload directive."""
         if self.dialect == "openacc":
@@ -46,19 +87,25 @@ class GPUPragmaTransformer:
         return self._generate_openmp_pragma(loop)
 
     def _generate_openmp_pragma(self, loop: LoopFeature) -> str:
-        """Generates OpenMP 4.5+ target offload directive with array section annotations."""
+        """Generates OpenMP 4.5+ target offload directive with if() and array section annotations."""
         clauses = ["#pragma omp target teams distribute parallel for"]
 
-        # 1. Reduction clause if applicable
+        # 1. Dynamic runtime crossover if() clause
+        bound_var = self._get_dynamic_bound_var(loop)
+        if bound_var:
+            crossover_n = self.find_crossover_threshold(loop)
+            if crossover_n:
+                clauses.append(f"if({bound_var} >= {crossover_n})")
+
+        # 2. Reduction clause if applicable
         if loop.has_reduction and loop.reduction_var:
             clauses.append(f"reduction(+:{loop.reduction_var})")
 
-        # 2. Map clauses for arrays with size annotations
+        # 3. Map clauses for arrays with size annotations
         read_only = loop.arrays_read - loop.arrays_written
         write_only = loop.arrays_written - loop.arrays_read
         read_write = loop.arrays_read & loop.arrays_written
 
-        # Use outer trip count for array size annotation (best available bound)
         size_hint = self._get_array_size_hint(loop)
 
         if read_only:
@@ -74,14 +121,21 @@ class GPUPragmaTransformer:
         return " ".join(clauses)
 
     def _generate_openacc_pragma(self, loop: LoopFeature) -> str:
-        """Generates OpenACC 2.7+ parallel loop directive with data clauses."""
+        """Generates OpenACC 2.7+ parallel loop directive with if() and data clauses."""
         clauses = ["#pragma acc parallel loop"]
 
-        # 1. Reduction clause if applicable
+        # 1. Dynamic runtime crossover if() clause
+        bound_var = self._get_dynamic_bound_var(loop)
+        if bound_var:
+            crossover_n = self.find_crossover_threshold(loop)
+            if crossover_n:
+                clauses.append(f"if({bound_var} >= {crossover_n})")
+
+        # 2. Reduction clause if applicable
         if loop.has_reduction and loop.reduction_var:
             clauses.append(f"reduction(+:{loop.reduction_var})")
 
-        # 2. Copy clauses for arrays with size annotations
+        # 3. Copy clauses for arrays with size annotations
         read_only = loop.arrays_read - loop.arrays_written
         write_only = loop.arrays_written - loop.arrays_read
         read_write = loop.arrays_read & loop.arrays_written
@@ -102,9 +156,6 @@ class GPUPragmaTransformer:
 
     def _get_array_size_hint(self, loop: LoopFeature) -> Optional[str]:
         """Extracts the best available array size from the loop's source context."""
-        # For depth >= 2, arrays are typically N*N; for depth 1, arrays are N
-        # Use the iterator variable's bound if parseable from source
-        import re
         bound_match = re.search(r'for\s*\([^;]*;\s*\w+\s*<\s*([a-zA-Z_]\w*)\s*;', loop.source_code)
         if bound_match:
             return bound_match.group(1)

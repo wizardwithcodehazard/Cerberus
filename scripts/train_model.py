@@ -23,7 +23,7 @@ from sklearn.metrics import (
 from rich.console import Console
 from rich.table import Table
 
-from cerberus.model import FEATURE_NAMES, FEATURE_LABELS, engineer_features
+from cerberus.model import FEATURE_NAMES, FEATURE_LABELS, MONOTONIC_CONSTRAINTS, engineer_features
 
 console = Console()
 
@@ -32,7 +32,7 @@ def train_and_evaluate(dataset_csv: str = "dataset/dataset_merged.csv", output_m
         console.print(f"[bold red]Error: Dataset file {dataset_csv} not found.[/bold red]")
         return
 
-    console.print(f"[bold cyan]=== Cerberus ML Training Pipeline ===[/bold cyan]")
+    console.print(f"[bold cyan]=== Cerberus Two-Stage Hurdle Training Pipeline ===[/bold cyan]")
     df_raw = pd.read_csv(dataset_csv)
     
     # 1. Data Sanitization
@@ -44,7 +44,6 @@ def train_and_evaluate(dataset_csv: str = "dataset/dataset_merged.csv", output_m
     console.print(f"Class Balance: [green]{pos_count} Profitable ({pos_count/len(df):.1%})[/green] | [red]{neg_count} Unprofitable ({neg_count/len(df):.1%})[/red]")
     
     # 2. Target Variable Calibration: Log2 speedup with lower-tail saturation at 0.05x
-    # (Speeds below 0.05x are all severe slowdowns; clamping avoids loss distortion)
     clamped_speedup = np.maximum(df["speedup"].values, 0.05)
     df["target_log_speedup"] = np.log2(clamped_speedup)
 
@@ -53,7 +52,7 @@ def train_and_evaluate(dataset_csv: str = "dataset/dataset_merged.csv", output_m
     y = df["target_log_speedup"]
     y_class_true = df["is_profitable"].values
 
-    console.print(f"Engineered Feature Vector: [cyan]{len(FEATURE_NAMES)} features[/cyan]\n")
+    console.print(f"Engineered Feature Vector: [cyan]{len(FEATURE_NAMES)} features[/cyan] with Physics Monotonic Constraints\n")
 
     # 4. Stratified 5-Fold Cross Validation
     skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
@@ -72,24 +71,38 @@ def train_and_evaluate(dataset_csv: str = "dataset/dataset_merged.csv", output_m
     for fold, (train_idx, val_idx) in enumerate(skf.split(X, y_class_true)):
         X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
         y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
-        y_class_val = y_class_true[val_idx]
+        y_class_train, y_class_val = y_class_true[train_idx], y_class_true[val_idx]
         hw_val = df["unified_memory"].iloc[val_idx].values
 
-        model = xgb.XGBRegressor(
+        # Stage 1: Classifier (Gating)
+        clf = xgb.XGBClassifier(
             n_estimators=180,
             max_depth=5,
             learning_rate=0.06,
-            subsample=0.85,
-            colsample_bytree=0.85,
-            reg_alpha=0.05,
-            reg_lambda=1.0,
+            monotone_constraints=MONOTONIC_CONSTRAINTS,
             random_state=42
         )
-        model.fit(X_train, y_train)
+        clf.fit(X_train, y_class_train)
+        y_prob = clf.predict_proba(X_val)[:, 1]
 
-        y_pred = model.predict(X_val)
+        # Stage 2: Regressor (Magnitude)
+        reg = xgb.XGBRegressor(
+            n_estimators=200,
+            max_depth=6,
+            learning_rate=0.06,
+            subsample=0.88,
+            colsample_bytree=0.88,
+            reg_alpha=0.05,
+            reg_lambda=1.0,
+            monotone_constraints=MONOTONIC_CONSTRAINTS,
+            random_state=42
+        )
+        reg.fit(X_train, y_train)
+        y_pred = reg.predict(X_val)
+
+        # Combined Two-Stage Decision
         pred_speedup = 2.0 ** y_pred
-        y_pred_class = (pred_speedup >= 1.05).astype(int)
+        y_pred_class = ((y_prob >= 0.5) & (pred_speedup >= 1.05)).astype(int)
 
         r2_scores.append(r2_score(y_val, y_pred))
         rmse_scores.append(math.sqrt(mean_squared_error(y_val, y_pred)))
@@ -98,7 +111,7 @@ def train_and_evaluate(dataset_csv: str = "dataset/dataset_merged.csv", output_m
         precisions.append(precision_score(y_class_val, y_pred_class, zero_division=0))
         recalls.append(recall_score(y_class_val, y_pred_class, zero_division=0))
         f1s.append(f1_score(y_class_val, y_pred_class, zero_division=0))
-        roc_aucs.append(roc_auc_score(y_class_val, pred_speedup))
+        roc_aucs.append(roc_auc_score(y_class_val, y_prob))
 
         # Subgroup Accuracies (iGPU vs dGPU)
         igpu_mask = (hw_val == 1.0)
@@ -109,36 +122,46 @@ def train_and_evaluate(dataset_csv: str = "dataset/dataset_merged.csv", output_m
             dgpu_accs.append(accuracy_score(y_class_val[dgpu_mask], y_pred_class[dgpu_mask]))
 
     # Print Validation Metrics
-    metrics_table = Table(title="Stratified 5-Fold Cross-Validation Performance")
+    metrics_table = Table(title="Two-Stage Hurdle Model 5-Fold Cross-Validation Performance")
     metrics_table.add_column("Evaluation Metric", style="cyan")
     metrics_table.add_column("Score (Mean +/- Std)", style="green", justify="right")
 
-    metrics_table.add_row("Regression R² Score", f"{np.mean(r2_scores):.4f} ± {np.std(r2_scores):.4f}")
-    metrics_table.add_row("Log2-Speedup RMSE", f"{np.mean(rmse_scores):.4f} ± {np.std(rmse_scores):.4f}")
-    metrics_table.add_row("Log2-Speedup MAE", f"{np.mean(mae_scores):.4f} ± {np.std(mae_scores):.4f}")
+    metrics_table.add_row("Classification ROC-AUC", f"{np.mean(roc_aucs):.4f} ± {np.std(roc_aucs):.4f}")
     metrics_table.add_row("Offload Gating Accuracy", f"{np.mean(accuracies) * 100:.2f}% ± {np.std(accuracies) * 100:.2f}%")
     metrics_table.add_row("Offload Decision Precision", f"{np.mean(precisions) * 100:.2f}% ± {np.std(precisions) * 100:.2f}%")
     metrics_table.add_row("Offload Decision Recall", f"{np.mean(recalls) * 100:.2f}% ± {np.std(recalls) * 100:.2f}%")
     metrics_table.add_row("Offload F1-Score", f"{np.mean(f1s):.4f} ± {np.std(f1s):.4f}")
-    metrics_table.add_row("ROC-AUC Score", f"{np.mean(roc_aucs):.4f} ± {np.std(roc_aucs):.4f}")
+    metrics_table.add_row("Regression R² Score", f"{np.mean(r2_scores):.4f} ± {np.std(r2_scores):.4f}")
+    metrics_table.add_row("Log2-Speedup RMSE", f"{np.mean(rmse_scores):.4f} ± {np.std(rmse_scores):.4f}")
+    metrics_table.add_row("Log2-Speedup MAE", f"{np.mean(mae_scores):.4f} ± {np.std(mae_scores):.4f}")
     metrics_table.add_row("iGPU Subgroup Accuracy", f"{np.mean(igpu_accs) * 100:.2f}% ± {np.std(igpu_accs) * 100:.2f}%")
     metrics_table.add_row("dGPU Subgroup Accuracy", f"{np.mean(dgpu_accs) * 100:.2f}% ± {np.std(dgpu_accs) * 100:.2f}%")
 
     console.print(metrics_table)
 
     # 5. Train final model on 100% of dataset
-    console.print("\n[yellow]Training production model on full merged dataset...[/yellow]")
-    final_model = xgb.XGBRegressor(
-        n_estimators=220,
+    console.print("\n[yellow]Training production Two-Stage Hurdle model on full merged dataset...[/yellow]")
+    final_clf = xgb.XGBClassifier(
+        n_estimators=200,
         max_depth=5,
+        learning_rate=0.06,
+        monotone_constraints=MONOTONIC_CONSTRAINTS,
+        random_state=42
+    )
+    final_clf.fit(X, y_class_true)
+
+    final_reg = xgb.XGBRegressor(
+        n_estimators=220,
+        max_depth=6,
         learning_rate=0.055,
         subsample=0.88,
         colsample_bytree=0.88,
         reg_alpha=0.05,
         reg_lambda=1.0,
+        monotone_constraints=MONOTONIC_CONSTRAINTS,
         random_state=42
     )
-    final_model.fit(X, y)
+    final_reg.fit(X, y)
 
     # Print Top Feature Importances
     imp_table = Table(title="Top Feature Importances (Gini Gain)")
@@ -146,7 +169,7 @@ def train_and_evaluate(dataset_csv: str = "dataset/dataset_merged.csv", output_m
     imp_table.add_column("Feature", style="cyan")
     imp_table.add_column("Importance Weight", style="green", justify="right")
 
-    importances = final_model.feature_importances_
+    importances = final_reg.feature_importances_
     sorted_idx = np.argsort(importances)[::-1]
     for rank, idx in enumerate(sorted_idx[:8], 1):
         feat_name = FEATURE_NAMES[idx]
@@ -174,11 +197,13 @@ def train_and_evaluate(dataset_csv: str = "dataset/dataset_merged.csv", output_m
     os.makedirs(os.path.dirname(output_model), exist_ok=True)
     with open(output_model, 'wb') as f:
         pickle.dump({
-            "model": final_model,
+            "classifier": final_clf,
+            "regressor": final_reg,
+            "model": final_reg,
             "metadata": metadata
         }, f)
 
-    console.print(f"\n[bold green][SUCCESS] Production model artifact exported to {output_model} (ROC-AUC: {metadata['roc_auc']}, N={metadata['n_samples']})[/bold green]")
+    console.print(f"\n[bold green][SUCCESS] Production Two-Stage Hurdle model exported to {output_model} (ROC-AUC: {metadata['roc_auc']}, N={metadata['n_samples']})[/bold green]")
 
 if __name__ == "__main__":
     default_dataset = "dataset/dataset_merged.csv" if os.path.exists("dataset/dataset_merged.csv") else ("dataset/dataset.csv" if os.path.exists("dataset/dataset.csv") else "dataset.csv")

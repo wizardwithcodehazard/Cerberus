@@ -12,7 +12,7 @@ from rich.panel import Panel
 from rich.text import Text
 from rich.prompt import Prompt
 
-from cerberus.parser import CLoopParser, LoopFeature
+from cerberus.parser import CLoopParser, LoopFeature, get_ast_parser
 from cerberus.model import ProfitabilityModel, PredictionResult
 from cerberus.hardware import HardwareProfile, detect_local_hardware, PRESET_PROFILES
 from cerberus.transformer import OpenMPTransformer
@@ -362,11 +362,14 @@ def list_target_profiles():
               help='Print all available hardware target profiles and exit.')
 @click.option('--include-tests', is_flag=True, default=False,
               help='Include test harness and validation functions (validate_*, check_*, main).')
+@click.option('--parser', 'parser_backend', type=click.Choice(['auto', 'clang', 'native'], case_sensitive=False), default='auto',
+              help='AST parser engine: auto (Clang if available), clang (LLVM libclang), or native.')
 @click.option('-q', '--quiet', is_flag=True, default=False,
               help='Suppress Rich formatting, print minimal output.')
 def main(source_file: Optional[str], output_file: str, report_file: Optional[str], target_name: str, dialect: str,
          param_str: str, explain: bool, audit_loop_idx: Optional[int], sweep: bool, sweep_range: Optional[Tuple[int, int]],
-         threshold: float, default_n: Optional[int], batch: bool, json_output: bool, list_targets: bool, include_tests: bool, quiet: bool):
+         threshold: float, default_n: Optional[int], batch: bool, json_output: bool, list_targets: bool, include_tests: bool,
+         parser_backend: str, quiet: bool):
     """Cerberus: Explainable ML-Guided GPU Offload Profitability Predictor.
 
     Analyzes candidate C/C++ loops, predicts GPU profitability against CPU baseline,
@@ -432,7 +435,21 @@ def main(source_file: Optional[str], output_file: str, report_file: Optional[str
 
     # 3. Parse Source File
     parser_trip_count = default_n if default_n else 10000
-    parser = CLoopParser(default_param_trip_count=parser_trip_count, params=params, include_tests=include_tests)
+    try:
+        parser = get_ast_parser(
+            backend=parser_backend,
+            default_param_trip_count=parser_trip_count,
+            params=params,
+            include_tests=include_tests,
+        )
+    except Exception as e:
+        console.print(f"[bold yellow]Warning: {e}. Falling back to native parser.[/bold yellow]")
+        parser = get_ast_parser(
+            backend="native",
+            default_param_trip_count=parser_trip_count,
+            params=params,
+            include_tests=include_tests,
+        )
     loops = parser.parse_file(source_file, params=params)
 
     if not loops:

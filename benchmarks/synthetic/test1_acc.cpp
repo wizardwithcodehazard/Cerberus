@@ -10,7 +10,7 @@
 //    Dense matrix multiplication with high arithmetic intensity
 // ============================================================
 void matrix_multiply(float* A, float* B, float* C, int N) {
-#pragma acc parallel loop copyin(A[0:N], B[0:N]) copy(C[0:N])
+#pragma acc parallel loop if(N >= 32) copyin(A[0:N], B[0:N]) copy(C[0:N])
     for (int i = 0; i < N; ++i) {
         for (int k = 0; k < N; ++k) {
             float aik = A[i * N + k];
@@ -79,7 +79,7 @@ void stencil_2d_convolution(float* input, float* output, int width, int height) 
 //    Cooley-Tukey FFT with complex arithmetic
 // ============================================================
 void fft(float* real, float* imag, int N) {
-#pragma acc parallel loop copy(imag[0:N], real[0:N])
+#pragma acc parallel loop if(N >= 32) copy(imag[0:N], real[0:N])
     for (int len = 2; len <= N; len <<= 1) {
         float ang = 2.0f * 3.14159265359f / len;
         float wreal = cos(ang), wimag = sin(ang);
@@ -107,7 +107,6 @@ void fft(float* real, float* imag, int N) {
 //    CSR format sparse operations with indirect memory access
 // ============================================================
 void sparse_mv_multiply(float* vals, int* col_indices, int* row_ptr, float* vec, float* out, int N) {
-#pragma acc parallel loop copyin(vals[0:N], vec[0:N]) copy(out[0:N])
     for (int i = 0; i < N; ++i) {
         float sum = 0.0f;
         for (int j = row_ptr[i]; j < row_ptr[i+1]; ++j) {
@@ -125,7 +124,6 @@ float pso_update(float* positions, float* velocities, float* best_positions, flo
                  int num_particles, int dims, float global_best_score, float* global_best_pos,
                  float inertia, float cognitive, float social) {
     float best_global = global_best_score;
-#pragma acc parallel loop copyin(best_positions[0:num_particles], global_best_pos[0:num_particles]) copy(positions[0:num_particles], velocities[0:num_particles])
     for (int i = 0; i < num_particles; ++i) {
         float r1 = rand() / (float)RAND_MAX;
         float r2 = rand() / (float)RAND_MAX;
@@ -145,7 +143,6 @@ float pso_update(float* positions, float* velocities, float* best_positions, flo
 //    Configurable arithmetic intensity with transcendental functions
 // ============================================================
 void compute_intensity_mix(float* data, float* out, int N, int intensity) {
-#pragma acc parallel loop copyin(data[0:N]) copy(out[0:N])
     for (int i = 0; i < N; ++i) {
         float val = data[i];
         for (int j = 0; j < intensity; ++j) {
@@ -165,7 +162,6 @@ void conv_layer_forward(float* input, float* weights, float* bias, float* output
                         int height, int width, int kernel_size) {
     int out_h = height - kernel_size + 1;
     int out_w = width - kernel_size + 1;
-#pragma acc parallel loop copyin(bias[0:batch], input[0:batch], weights[0:batch]) copy(output[0:batch])
     for (int b = 0; b < batch; ++b) {
         for (int oc = 0; oc < out_channels; ++oc) {
             for (int oh = 0; oh < out_h; ++oh) {
@@ -198,6 +194,7 @@ void conv_layer_forward(float* input, float* weights, float* bias, float* output
 //     Bank conflict heavy memory access pattern
 // ============================================================
 void matrix_transpose(float* input, float* output, int rows, int cols) {
+#pragma acc parallel loop if(rows >= 256) copyin(input[0:rows]) copy(output[0:rows])
     for (int i = 0; i < rows; ++i) {
         for (int j = 0; j < cols; ++j) {
             output[j * rows + i] = input[i * cols + j];
@@ -211,7 +208,6 @@ void matrix_transpose(float* input, float* output, int rows, int cols) {
 void validate_matrix_multiply() {
     const int N = 8;
     float A[64] = {0}, B[64] = {0}, C[64] = {0};
-#pragma acc parallel loop copy(A[0:N], B[0:N])
     for (int i = 0; i < N; ++i) {
         for (int j = 0; j < N; ++j) {
             A[i*N+j] = (i == j) ? 1.0f : 0.0f; // Identity
