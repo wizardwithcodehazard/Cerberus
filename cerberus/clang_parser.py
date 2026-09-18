@@ -86,6 +86,13 @@ class ClangASTParser:
 
         # 3. Clang parse translation unit
         args = list(self.extra_clang_args)
+        if filepath.endswith(".c"):
+            args = [a for a in args if not a.startswith("-std=c++")]
+            if not any(a.startswith("-std=") for a in args):
+                args.append("-std=c11")
+        elif not any(a.startswith("-std=") for a in args):
+            args.append("-std=c++17")
+
         tu = self.index.parse(
             filepath,
             args=args,

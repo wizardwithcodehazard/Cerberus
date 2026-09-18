@@ -10,7 +10,7 @@
 //    Dense matrix multiplication with high arithmetic intensity
 // ============================================================
 void matrix_multiply(float* A, float* B, float* C, int N) {
-#pragma omp target teams distribute parallel for if(N >= 64) map(to: A[0:N], B[0:N]) map(tofrom: C[0:N])
+#pragma omp target teams distribute parallel for if(N >= 32) map(to: A[0:N], B[0:N]) map(tofrom: C[0:N])
     for (int i = 0; i < N; ++i) {
         for (int k = 0; k < N; ++k) {
             float aik = A[i * N + k];
@@ -38,7 +38,7 @@ float parallel_reduction(const float* data, int N) {
 //    O(N²) pairwise interactions with sqrt operations
 // ============================================================
 void nbody_update(float* pos_x, float* pos_y, float* vel_x, float* vel_y, int N, float dt) {
-#pragma omp target teams distribute parallel for if(N >= 4096) map(to: pos_x[0:N], pos_y[0:N]) map(tofrom: vel_x[0:N], vel_y[0:N])
+#pragma omp target teams distribute parallel for if(N >= 64) map(to: pos_x[0:N], pos_y[0:N]) map(tofrom: vel_x[0:N], vel_y[0:N])
     for (int i = 0; i < N; ++i) {
         float fx = 0, fy = 0;
         for (int j = 0; j < N; ++j) {
@@ -61,6 +61,7 @@ void nbody_update(float* pos_x, float* pos_y, float* vel_x, float* vel_y, int N,
 // ============================================================
 void stencil_2d_convolution(float* input, float* output, int width, int height) {
     float kernel[3][3] = {{1,2,1},{2,4,2},{1,2,1}};
+#pragma omp target teams distribute parallel for map(to: input, kernel) map(tofrom: output)
     for (int y = 1; y < height-1; ++y) {
         for (int x = 1; x < width-1; ++x) {
             float val = 0;
@@ -79,7 +80,7 @@ void stencil_2d_convolution(float* input, float* output, int width, int height) 
 //    Cooley-Tukey FFT with complex arithmetic
 // ============================================================
 void fft(float* real, float* imag, int N) {
-#pragma omp target teams distribute parallel for if(N >= 64) map(tofrom: imag[0:N], real[0:N])
+#pragma omp target teams distribute parallel for if(N >= 32) map(tofrom: imag[0:N], real[0:N])
     for (int len = 2; len <= N; len <<= 1) {
         float ang = 2.0f * 3.14159265359f / len;
         float wreal = cos(ang), wimag = sin(ang);
@@ -107,6 +108,7 @@ void fft(float* real, float* imag, int N) {
 //    CSR format sparse operations with indirect memory access
 // ============================================================
 void sparse_mv_multiply(float* vals, int* col_indices, int* row_ptr, float* vec, float* out, int N) {
+#pragma omp target teams distribute parallel for if(N >= 64) map(to: vals[0:N], vec[0:N]) map(tofrom: out[0:N])
     for (int i = 0; i < N; ++i) {
         float sum = 0.0f;
         for (int j = row_ptr[i]; j < row_ptr[i+1]; ++j) {
@@ -124,6 +126,7 @@ float pso_update(float* positions, float* velocities, float* best_positions, flo
                  int num_particles, int dims, float global_best_score, float* global_best_pos,
                  float inertia, float cognitive, float social) {
     float best_global = global_best_score;
+#pragma omp target teams distribute parallel for if(num_particles >= 64) map(to: best_positions[0:num_particles], global_best_pos[0:num_particles]) map(tofrom: positions[0:num_particles], velocities[0:num_particles])
     for (int i = 0; i < num_particles; ++i) {
         float r1 = rand() / (float)RAND_MAX;
         float r2 = rand() / (float)RAND_MAX;
@@ -143,6 +146,7 @@ float pso_update(float* positions, float* velocities, float* best_positions, flo
 //    Configurable arithmetic intensity with transcendental functions
 // ============================================================
 void compute_intensity_mix(float* data, float* out, int N, int intensity) {
+#pragma omp target teams distribute parallel for if(N >= 32) map(to: data[0:N]) map(tofrom: out[0:N])
     for (int i = 0; i < N; ++i) {
         float val = data[i];
         for (int j = 0; j < intensity; ++j) {
@@ -162,6 +166,7 @@ void conv_layer_forward(float* input, float* weights, float* bias, float* output
                         int height, int width, int kernel_size) {
     int out_h = height - kernel_size + 1;
     int out_w = width - kernel_size + 1;
+#pragma omp target teams distribute parallel for if(batch >= 32) map(to: bias[0:batch], input[0:batch], weights[0:batch]) map(tofrom: output[0:batch])
     for (int b = 0; b < batch; ++b) {
         for (int oc = 0; oc < out_channels; ++oc) {
             for (int oh = 0; oh < out_h; ++oh) {
@@ -194,6 +199,7 @@ void conv_layer_forward(float* input, float* weights, float* bias, float* output
 //     Bank conflict heavy memory access pattern
 // ============================================================
 void matrix_transpose(float* input, float* output, int rows, int cols) {
+#pragma omp target teams distribute parallel for if(rows >= 64) map(to: input[0:rows]) map(tofrom: output[0:rows])
     for (int i = 0; i < rows; ++i) {
         for (int j = 0; j < cols; ++j) {
             output[j * rows + i] = input[i * cols + j];

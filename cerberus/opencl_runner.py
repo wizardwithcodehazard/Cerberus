@@ -40,16 +40,16 @@ class GPUExecutionProfile:
 class OpenCLEngine:
     """Hardware executor interfacing OpenCL.dll directly without third-party dependencies."""
 
-    def __init__(self):
+    def __init__(self, preferred_vendor: Optional[str] = None):
         self.cl = None
         self.platform = None
         self.device = None
         self.device_name = "Unknown GPU"
         self.context = None
         self.queue = None
-        self._init_opencl()
+        self._init_opencl(preferred_vendor)
 
-    def _init_opencl(self):
+    def _init_opencl(self, preferred_vendor: Optional[str] = None):
         try:
             self.cl = ctypes.windll.LoadLibrary("OpenCL.dll")
         except Exception:
@@ -119,6 +119,8 @@ class OpenCLEngine:
         self.cl.clReleaseEvent.argtypes = [c_void_p]
 
         # Enumerate platform and primary GPU
+        # On hybrid-GPU laptops (iGPU + dGPU), multiple platforms may exist.
+        # Prefer NVIDIA CUDA > AMD > Intel > first available to target the dGPU.
         num_platforms = c_uint32(0)
         self.cl.clGetPlatformIDs(0, None, byref(num_platforms))
         if num_platforms.value == 0:
@@ -126,7 +128,33 @@ class OpenCLEngine:
 
         platforms = (c_void_p * num_platforms.value)()
         self.cl.clGetPlatformIDs(num_platforms.value, platforms, None)
-        self.platform = platforms[0]
+
+        # Smart platform selection: score each platform by vendor preference
+        best_platform = platforms[0]
+        best_score = -1
+        plat_name_buf = create_string_buffer(256)
+        pref = (preferred_vendor or "").lower()
+        for plat in platforms:
+            self.cl.clGetPlatformInfo(plat, CL_PLATFORM_NAME, 256, plat_name_buf, None)
+            plat_name = plat_name_buf.value.decode("utf-8", errors="ignore").lower()
+            if pref == "amd" and ("amd" in plat_name or "rocm" in plat_name):
+                score = 10
+            elif pref == "nvidia" and ("nvidia" in plat_name or "cuda" in plat_name):
+                score = 10
+            elif pref == "intel" and "intel" in plat_name:
+                score = 10
+            elif "nvidia" in plat_name or "cuda" in plat_name:
+                score = 3  # Default highest priority: NVIDIA CUDA
+            elif "amd" in plat_name or "rocm" in plat_name:
+                score = 2
+            elif "intel" in plat_name:
+                score = 1
+            else:
+                score = 0
+            if score > best_score:
+                best_score = score
+                best_platform = plat
+        self.platform = best_platform
 
         num_devices = c_uint32(0)
         err = self.cl.clGetDeviceIDs(self.platform, CL_DEVICE_TYPE_ALL, 0, None, byref(num_devices))
@@ -156,10 +184,11 @@ class OpenCLEngine:
         """Profiles a 1D kernel on the physical GPU with exact nanosecond timing."""
         import numpy as np
 
-        # Allocate host arrays
-        a = np.ones(size, dtype=np.float32) * 1.5
-        b = np.ones(size, dtype=np.float32) * 2.5
-        c = np.zeros(size, dtype=np.float32)
+        # Allocate host arrays (size * 4 to safely accommodate strides up to 4)
+        buf_size = size * 4
+        a = np.ones(buf_size, dtype=np.float32) * 1.5
+        b = np.ones(buf_size, dtype=np.float32) * 2.5
+        c = np.zeros(buf_size, dtype=np.float32)
         n_bytes = a.nbytes
 
         err_code = c_int32(0)
@@ -197,6 +226,37 @@ class OpenCLEngine:
         # Launch kernel
         global_work_size = (c_size_t * 1)(size)
         self.cl.clEnqueueNDRangeKernel(self.queue, kernel, 1, None, global_work_size, None, 0, None, byref(evt_kernel))
+
+        # Read back results
+        self.cl.clEnqueueReadBuffer(self.queue, d_c, 1, 0, n_bytes, c.ctypes.data, 0, None, byref(evt_read))
+
+        # Query profiling nanoseconds
+        t_write1 = self._get_event_duration_ms(evt_write1)
+        t_write2 = self._get_event_duration_ms(evt_write2)
+        t_kernel = self._get_event_duration_ms(evt_kernel)
+        t_read = self._get_event_duration_ms(evt_read)
+
+        # Cleanup
+        self.cl.clReleaseMemObject(d_a)
+        self.cl.clReleaseMemObject(d_b)
+        self.cl.clReleaseMemObject(d_c)
+        self.cl.clReleaseKernel(kernel)
+        self.cl.clReleaseProgram(program)
+        self.cl.clReleaseEvent(evt_write1)
+        self.cl.clReleaseEvent(evt_write2)
+        self.cl.clReleaseEvent(evt_kernel)
+        self.cl.clReleaseEvent(evt_read)
+
+        t_transfer_in = t_write1 + t_write2
+        t_total = t_transfer_in + t_kernel + t_read
+
+        return GPUExecutionProfile(
+            device_name=self.device_name,
+            transfer_in_ms=t_transfer_in,
+            kernel_compute_ms=t_kernel,
+            transfer_out_ms=t_read,
+            total_gpu_ms=t_total
+        )
 
     def profile_kernel_2d(self, kernel_name: str, kernel_source: str, dim: int) -> GPUExecutionProfile:
         """Profiles a 2D/3D matrix kernel on the physical GPU with exact nanosecond timing."""

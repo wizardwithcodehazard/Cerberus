@@ -442,15 +442,16 @@ def main(source_file: Optional[str], output_file: str, report_file: Optional[str
             params=params,
             include_tests=include_tests,
         )
+        loops = parser.parse_file(source_file, params=params)
     except Exception as e:
-        console.print(f"[bold yellow]Warning: {e}. Falling back to native parser.[/bold yellow]")
+        console.print(f"[bold yellow]Notice: Clang parser exception ({e}). Falling back to native AST parser.[/bold yellow]")
         parser = get_ast_parser(
             backend="native",
             default_param_trip_count=parser_trip_count,
             params=params,
             include_tests=include_tests,
         )
-    loops = parser.parse_file(source_file, params=params)
+        loops = parser.parse_file(source_file, params=params)
 
     if not loops:
         if json_output:

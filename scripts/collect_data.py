@@ -52,9 +52,9 @@ int main() {
     int N = {DIM};
     int S = {DIM};
     
-    // Allocate buffers
-    size_t sz = (size_t)N * (size_t)N * sizeof(float);
-    if (sz < (size_t)N * sizeof(float) * 16) sz = (size_t)N * sizeof(float) * 16;
+    // Allocate buffers sized to actual workload
+    size_t sz = {SZ_EXPR};
+    if (sz < 1024) sz = 1024;
     if (sz > 256 * 1024 * 1024) sz = 256 * 1024 * 1024; // Cap to 256MB
 
     float *a = (float*)malloc(sz);
@@ -83,7 +83,7 @@ int main() {
     double t_end = get_time_ms();
     double avg_ms = (t_end - t_start) / (double)iters;
 
-    printf("%.6f\\n", avg_ms);
+    printf("%.6f\n", avg_ms);
 
     free(a); free(b); free(c); free(d); free(tmp);
     return 0;
@@ -165,9 +165,9 @@ def compile_and_run(c_code: str, compiler_flags: List[str]) -> float:
 
     try:
         cmd = [compiler_exe, "-O2"] + compiler_flags + [src_file, "-o", exe_file]
-        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5)
         if res.returncode == 0:
-            run_res = subprocess.run([exe_file], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=10)
+            run_res = subprocess.run([exe_file], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5)
             if run_res.returncode == 0 and run_res.stdout.strip():
                 return float(run_res.stdout.strip().splitlines()[-1])
     except Exception:
@@ -177,13 +177,13 @@ def compile_and_run(c_code: str, compiler_flags: List[str]) -> float:
 
 from cerberus.opencl_runner import OpenCLEngine, GPUExecutionProfile
 
-def collect_dataset(target_profile: HardwareProfile, output_csv: str = "dataset.csv"):
+def collect_dataset(target_profile: HardwareProfile, output_csv: str = "dataset.csv", preferred_vendor: Optional[str] = None):
     console.print(f"[bold cyan]Cerberus Real Hardware Benchmarking Engine[/bold cyan]")
     
     # Initialize real physical GPU OpenCL engine
     opencl_engine = None
     try:
-        opencl_engine = OpenCLEngine()
+        opencl_engine = OpenCLEngine(preferred_vendor=preferred_vendor)
         console.print(f"Connected to Physical GPU: [bold green]{opencl_engine.device_name}[/bold green] (via Native OpenCL Driver)\n")
     except Exception as e:
         console.print(f"[yellow]Notice: OpenCL initialization: {e}. Using driver fallback.[/yellow]\n")
@@ -223,10 +223,12 @@ def collect_dataset(target_profile: HardwareProfile, output_csv: str = "dataset.
                 call_expr = generate_call_expr(kernel.name)
                 
                 # 1. Sequential CPU execution (compiled via GCC)
+                sz_expr = f"(size_t){dim} * 16 * sizeof(float)" if kernel.loop_depth == 1 else f"(size_t){dim} * (size_t){dim} * sizeof(float)"
                 cpu_src = (
                     C_RUNNER_TEMPLATE
                     .replace("{KERNEL_DEF}", kernel.c_source_template)
                     .replace("{DIM}", str(dim))
+                    .replace("{SZ_EXPR}", sz_expr)
                     .replace("{CALL_EXPR}", call_expr)
                 )
                 t_cpu_ms = compile_and_run(cpu_src, [])
@@ -354,7 +356,14 @@ void param_kernel(float *a, float *b, float *c, int N) {{
     }}
 }}
 """
-                        cpu_src = C_RUNNER_TEMPLATE.replace("{KERNEL_DEF}", c_func).replace("{DIM}", str(n_elem)).replace("{CALL_EXPR}", "param_kernel(a, b, c, N);")
+                        sz_expr = f"(size_t){n_elem} * {max(stride, 1) * 2} * sizeof(float)"
+                        cpu_src = (
+                            C_RUNNER_TEMPLATE
+                            .replace("{KERNEL_DEF}", c_func)
+                            .replace("{DIM}", str(n_elem))
+                            .replace("{SZ_EXPR}", sz_expr)
+                            .replace("{CALL_EXPR}", "param_kernel(a, b, c, N);")
+                        )
                         t_cpu_ms = compile_and_run(cpu_src, [])
                         if t_cpu_ms <= 0:
                             t_cpu_ms = max(0.001, (n_elem * flops) / 3.5e7)
@@ -437,12 +446,16 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Collect empirical benchmark data for MarkovLens.")
     parser.add_argument("--device", choices=list(PRESET_PROFILES.keys()) + ["auto"], default="auto",
                         help="Target device profile to benchmark.")
+    parser.add_argument("--platform", choices=["auto", "nvidia", "amd", "intel"], default="auto",
+                        help="Preferred OpenCL platform / GPU vendor (e.g. nvidia, amd).")
     parser.add_argument("--output", default="dataset.csv", help="Output CSV path.")
     args = parser.parse_args()
 
+    pref_vendor = None if args.platform == "auto" else args.platform
+
     if args.device == "auto":
-        hw = detect_local_hardware()
+        hw = detect_local_hardware(preferred_vendor=pref_vendor)
     else:
         hw = PRESET_PROFILES[args.device]
 
-    collect_dataset(hw, args.output)
+    collect_dataset(hw, args.output, preferred_vendor=pref_vendor)

@@ -391,8 +391,9 @@ def _query_pcie_bandwidth(gpu_name: str) -> float:
     return PCIE_DEFAULT_BW_GBPS
 
 
-def _query_live_opencl_hardware(cpu_name: str, cpu_tflops: float) -> Optional[HardwareProfile]:
+def _query_live_opencl_hardware(cpu_name: str, cpu_tflops: float, preferred_vendor: Optional[str] = None) -> Optional[HardwareProfile]:
     """Queries all live GPU devices across all OpenCL platforms (Intel, NVIDIA, AMD)."""
+    pref = (preferred_vendor or "").lower()
     try:
         try:
             cl = ctypes.windll.LoadLibrary("OpenCL.dll")
@@ -407,6 +408,14 @@ def _query_live_opencl_hardware(cpu_name: str, cpu_tflops: float) -> Optional[Ha
         CL_DEVICE_MAX_COMPUTE_UNITS = 0x1002
         CL_DEVICE_MAX_CLOCK_FREQUENCY = 0x100C
         CL_DEVICE_HOST_UNIFIED_MEMORY = 0x1035
+
+        # Set 64-bit ctypes argtypes
+        cl.clGetPlatformIDs.argtypes = [c_uint32, c_void_p, c_void_p]
+        cl.clGetPlatformIDs.restype = ctypes.c_int32
+        cl.clGetDeviceIDs.argtypes = [c_void_p, ctypes.c_uint64, c_uint32, c_void_p, c_void_p]
+        cl.clGetDeviceIDs.restype = ctypes.c_int32
+        cl.clGetDeviceInfo.argtypes = [c_void_p, c_uint32, ctypes.c_size_t, c_void_p, c_void_p]
+        cl.clGetDeviceInfo.restype = ctypes.c_int32
 
         # Get all platforms (e.g. Intel OpenCL + NVIDIA CUDA + AMD ROCm)
         num_platforms = c_uint32()
@@ -495,8 +504,13 @@ def _query_live_opencl_hardware(cpu_name: str, cpu_tflops: float) -> Optional[Ha
         if not detected_gpus:
             return None
 
-        # Prioritize discrete high-performance GPU over integrated if multiple exist
-        detected_gpus.sort(key=lambda x: (x.type_code == 1, x.peak_tflops), reverse=True)
+        if pref == "amd":
+            detected_gpus.sort(key=lambda x: (x.device_type == "igpu" or "amd" in x.name.lower() or "radeon" in x.name.lower() or x.unified_memory, x.peak_tflops), reverse=True)
+        elif pref == "nvidia":
+            detected_gpus.sort(key=lambda x: (x.device_type == "dgpu" and any(k in x.name.lower() for k in ("nvidia", "rtx", "gtx", "geforce")), x.peak_tflops), reverse=True)
+        else:
+            # Prioritize discrete high-performance GPU over integrated if multiple exist
+            detected_gpus.sort(key=lambda x: (x.type_code == 1, x.peak_tflops), reverse=True)
         return detected_gpus[0]
 
     except Exception:
@@ -518,12 +532,12 @@ def _query_live_system_ram_bandwidth() -> float:
         pass
     return DEFAULT_SYSTEM_RAM_BW_GBPS
 
-def detect_local_hardware() -> HardwareProfile:
+def detect_local_hardware(preferred_vendor: Optional[str] = None) -> HardwareProfile:
     """Dynamically detects host GPU hardware directly from live silicon registers across all vendors."""
     cpu_name, cpu_tflops = detect_host_cpu()
 
     # 1. Direct Multi-Platform Driver Query via OpenCL
-    live_profile = _query_live_opencl_hardware(cpu_name, cpu_tflops)
+    live_profile = _query_live_opencl_hardware(cpu_name, cpu_tflops, preferred_vendor=preferred_vendor)
     if live_profile:
         return live_profile
 
