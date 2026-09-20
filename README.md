@@ -102,55 +102,28 @@ flowchart TD
 
 ---
 
-## Six Core Technical Pillars
+## Technical Pillars
 
-### 1. LLVM Clang AST Parser & Static Feature Extraction
-Cerberus leverages `libclang` C-Index bindings to parse translation units into structured Abstract Syntax Trees (`-std=c++17` / `-std=c11`), extracting **12 semantic loop features**:
+### 1. LLVM Clang AST Parser
+Uses `libclang` C-Index bindings to parse C/C++ into Abstract Syntax Trees, extracting **12 semantic loop features** including trip count, FLOPs, arithmetic intensity, memory footprint, coalescing efficiency, stride regularity, RAW hazard flags, and reduction detection. Falls back to regex-based parsing if `libclang` is unavailable.
 
-| # | Feature Name | Description & Formula | Architectural Significance |
-|---|---|---|---|
-| **1** | `is_parallel_safe` | Boolean flag (1.0 or 0.0) from RAW hazard checks | Prevents race hazards on loop-carried dependencies (`A[i] = A[i-1]`). |
-| **2** | `trip_count` | Dynamic iteration count ($N$, $N \times M$, $N \times M \times K$) | Determines if total parallel work amortizes kernel launch latency. |
-| **3** | `nesting_depth` | Loop nest level ($1\text{D}, 2\text{D}, 3\text{D}, \dots$) | Deep nesting indicates high data reuse and compute density. |
-| **4** | `flops_per_iter` | Floating point operations inside loop body | Weighted math: adds/muls = 1, `sqrt` = 5, `sin`/`cos` = 15, `pow` = 25. |
-| **5** | `total_flops` | $\text{trip\_count} \times \text{flops\_per\_iter}$ | Total operational volume of computation. |
-| **6** | `memory_footprint_bytes` | Unique array tensor working set in bytes | Direct volume of data transferred over the interconnect. |
-| **7** | `arithmetic_intensity` | $\frac{\text{Total FLOPs}}{\text{Memory Footprint Bytes}}$ | The fundamental metric of the Williams Roofline Model. |
-| **8** | `data_reuse_ratio` | $\frac{\text{Raw Memory Traffic}}{\text{Unique Memory Footprint}}$ | Distinguishes $O(N)$ streaming from $O(N^3)$ high-reuse algorithms. |
-| **9** | `coalescing_efficiency` | Warp SIMD memory alignment score ($0.20 - 1.0$) | Evaluates unit-stride ($1.0$) vs strided ($0.35$) vs gather ($0.20$). |
-| **10** | `stride_regularity` | Hardware stream prefetcher friendliness ($0.20 - 1.0$) | Quantifies predictability of memory address indexing. |
-| **11** | `branch_divergence_count`| Count of `if/else/switch` conditions | Quantifies SIMD lane serialization within 32-thread warps. |
-| **12** | `has_reduction` | Presence of accumulator variables (`sum += ...`) | Injects OpenMP `reduction(+:var)` clauses to avoid race conditions. |
+**Coalescing Heuristics** (NVIDIA CUDA Best Practices):
 
-```
-                              COALESCING & PREFETCHER HEURISTICS
-┌──────────────────────────────┬──────────────────┬────────────┬──────────────────────────────────────┐
-│ Pattern                      │ Code Subscript   │ Score      │ Hardware Mechanism                   │
-├──────────────────────────────┼──────────────────┼────────────┼──────────────────────────────────────┤
-│ Unit Stride                  │ A[i], A[j]       │ 1.00       │ 1 Bus Transaction per 32 Threads     │
-│ Strided / 2D Row             │ A[i*stride]      │ 0.35       │ Gaps Waste Bus Width (NVIDIA Guide)  │
-│ Indirect / Gather            │ A[indices[i]]    │ 0.20       │ Scattered Uncoalesced Transactions   │
-│ Unknown / Structured         │ A[N-i]           │ 0.80       │ Conservative Non-Penalizing Fallback │
-└──────────────────────────────┴──────────────────┴────────────┴──────────────────────────────────────┘
-```
+| Pattern | Score | Hardware Behavior |
+|---|:---:|---|
+| Unit stride `A[i]` | `1.00` | 1 transaction per 32 warp threads |
+| Strided `A[i*N+j]` | `0.35` | Address gaps waste PCIe bus width |
+| Indirect gather `A[idx[i]]` | `0.20` | Scattered uncoalesced transactions |
 
 ---
 
-### 2. Native Silicon Probing & OpenCL Discovery Engine
-Cerberus bypasses heavyweight dependencies by dynamically binding to native `OpenCL.dll` or `libOpenCL.so` via Python `ctypes`:
-* **Host CPU Architecture:** Core counts, base/boost clocks, and SIMD Vector ISA (AVX2: 16 FLOPs/cycle vs. AVX-512: 32 FLOPs/cycle).
-* **GPU Compute Units & Clocks:** Queries physical compute units, max work-group sizes, and boost frequencies.
-* **Vendor-Specific ALU Multipliers:**
-  - **NVIDIA:** 128 CUDA Cores per Streaming Multiprocessor (SM).
-  - **AMD:** 128 Stream Processors per Dual Compute Unit (WGP - RDNA3).
-  - **Intel:** 16 Vector Engines per Xe-Core.
-* **Interconnect & Memory Subsystem:** Differentiates Discrete GPUs (PCIe Gen3/4/5 x16 @ $15.75 - 63.0\text{ GB/s}$) from Integrated APUs (Zero-copy Unified Memory @ $51.2 - 89.6\text{ GB/s}$).
-* **Hardware Fallback Database:** Contains calibrated datasheet specs for 70+ GPU models (RTX 5090 to Iris Xe).
+### 2. Native Silicon Probing via OpenCL
+Dynamically binds to `OpenCL.dll` / `libOpenCL.so` via `ctypes` — no heavyweight runtime dependency. Discovers CPU SIMD width (AVX2 / AVX-512), GPU compute units, boost clocks, and PCIe interconnect bandwidth. Differentiates discrete PCIe GPUs from zero-copy unified APUs. Includes a fallback database of calibrated datasheet specs for 70+ GPU models.
 
 ---
 
-### 3. Physics-Constrained Two-Stage Hurdle XGBoost Model
-In parallel computing, speedup spans an extreme non-linear range ($0.01\times$ to $1200\times$). A single regression model fails on this distribution. Cerberus introduces a **Two-Stage Hurdle Architecture**:
+### 3. Physics-Constrained Two-Stage Hurdle XGBoost
+Speedup spans a non-linear range ($0.01\times$ to $1200\times$) — a single regressor fails on this distribution. Cerberus uses a two-stage hurdle:
 
 ```mermaid
 graph LR
@@ -164,50 +137,33 @@ graph LR
     GATE -->|"Fails Either"| UNPROFITABLE["KEEP CPU SEQUENTIAL"]
 ```
 
-#### Monotonic Physics Constraints (Preventing AI Hallucinations)
-Unconstrained tree models can make physically impossible predictions. Cerberus strictly enforces monotonicity inside the tree splits:
-* **Positive Monotonicity (+1):** Total FLOPs, trip count, cache reuse, and Roofline attainable GFLOPS can **never** decrease predicted speedup.
-* **Negative Monotonicity (-1):** Higher PCIe transfer-to-compute ratios and branch divergence can **never** increase predicted speedup.
-
-#### Uncertainty Quantification (95% Confidence Intervals)
-Every continuous speedup prediction includes statistical error bounds based on 5-fold cross-validation RMSE ($\sigma_{\text{RMSE}} = 0.285$):
+**Monotonic constraints** prevent hallucinated predictions: more FLOPs / higher reuse can never decrease speedup; more PCIe overhead / branch divergence can never increase it. Every prediction includes a **95% confidence interval**:
 
 $$\text{CI}_{95} = [ 2^{\hat{y} - 1.96\sigma}, \quad 2^{\hat{y} + 1.96\sigma} ]$$
 
-
 ---
 
-### 4. TreeSHAP Attribution & Williams Roofline Model
-
-#### TreeSHAP Feature Attributions
-Cerberus computes exact game-theoretic Shapley values using `TreeExplainer`, breaking down the mathematical forces driving each decision:
-* `+3.42 SHAP` — Massive arithmetic intensity pushing towards GPU.
-* `+2.10 SHAP` — High temporal cache reuse amortizing memory fetches.
-* `-1.85 SHAP` — Small trip count dominated by kernel launch overhead.
-* `-0.92 SHAP` — PCIe transfer latency penalty.
-
-#### The Williams Roofline Model
-Cerberus computes the hardware execution ceiling:
+### 4. TreeSHAP & Williams Roofline Model
+`TreeExplainer` decomposes each decision into exact Shapley attributions (e.g. `+3.42` arithmetic intensity, `-1.85` small trip count). The Williams Roofline model computes the hardware execution ceiling:
 
 $$\text{Attainable GFLOPS} = \min(\text{Peak GFLOPS}_{\text{GPU}}, \quad \text{Arithmetic Intensity} \times \text{Bandwidth}_{\text{Eff}})$$
 
 $$\text{Bandwidth}_{\text{Eff}} = \text{Bus BW} \times \text{Coalescing} \times \text{Stride Regularity}$$
 
+---
+
+### 5. Source-to-Source OpenMP / OpenACC Synthesizer
+For profitable loops, rewrites source in-place with:
+- **Dynamic crossover guards** — `if(N >= 2048)` so small inputs stay on CPU
+- **Directional memory clauses** — `map(to: A[0:N*N]) map(from: C[0:N*N])`
+- **Reduction clauses** — `reduction(+:sum)` from detected accumulator variables
 
 ---
 
-### 5. Automated Source-to-Source OpenMP / OpenACC Synthesizer
-When a loop is profitable, Cerberus rewrites the source code without destroying existing structure:
-1. **Dynamic Runtime Crossover Guards:** Solves for the inflection point $N^*$ where GPU speed matches CPU. Synthesized clause: `if(N >= 2048)`
-2. **Directional Memory Transfers:** Analyzes AST read/write sets to emit minimal transfers: `map(to: A[0:N*N], B[0:N*N]) map(from: C[0:N*N])`
-3. **Atomic Reduction Clauses:** Detects accumulator variables and injects `reduction(+:sum)`.
-
----
-
-### 6. Offline AI Optimization Advisor (Local Qwen2.5-Coder SLM)
-When a loop is unprofitable, Cerberus provides targeted optimization advice. It features a **hybrid advisor**:
-* **Local 0.5B Neural SLM (`Qwen/Qwen2.5-Coder-0.5B-Instruct`):** Runs 100% locally and offline on CPU, synthesizing refactored SIMD/GPU C++ code based on TreeSHAP bottlenecks.
-* **Deterministic AST Code Synthesizer:** Fallback engine that generates branchless selects (`std::clamp`) or shared-memory staging tiles.
+### 6. Offline AI Optimization Advisor
+For unprofitable loops, a **hybrid advisor** provides refactoring guidance:
+- **Local Qwen2.5-Coder-0.5B SLM** — runs fully offline on CPU, suggests SIMD/cache-friendly rewrites based on TreeSHAP bottlenecks
+- **Deterministic AST synthesizer** — fallback engine generating branchless selects and tiled loops
 
 ---
 
@@ -262,54 +218,6 @@ Cerberus was trained and validated on **2,318 physical silicon benchmark executi
 
 ---
 
-## Complex Suite Evaluation (`test1.cpp`)
-
-Live benchmark evaluation on a complex 10-kernel heterogeneous C++ suite:
-
-| Line # | Kernel Function | Loop Nest | Arithmetic Intensity | Roofline Ceiling | Predicted Speedup (95% CI) | Decision |
-| :---: | :--- | :---: | :---: | :---: | :---: | :---: |
-| **L15** | `matrix_multiply()` | Depth 3 | $0.67\text{ FLOP/B}$ | $3.1\text{ GFLOPS}$ | **`11.81x`** $(8.2\text{x} - 17.0\text{x})$ | `[INJECT OFFLOAD]` |
-| **L29** | `parallel_reduction()` | Depth 1 | $0.75\text{ FLOP/B}$ | $11.8\text{ GFLOPS}$ | **`0.26x`** $(0.18\text{x} - 0.38\text{x})$ | `[KEEP CPU]` |
-| **L42** | `nbody_update()` | Depth 2 | $1.38\text{ FLOP/B}$ | $18.7\text{ GFLOPS}$ | **`152.74x`** $(106\text{x} - 220\text{x})$ | `[INJECT OFFLOAD]` |
-| **L58** | `stencil_2d_convolution()`| Depth 4 | $1.25\text{ FLOP/B}$ | $9.9\text{ GFLOPS}$ | **`62.06x`** $(43\text{x} - 89\text{x})$ | `[INJECT OFFLOAD]` |
-| **L75** | `fft()` | Depth 3 | $6.75\text{ FLOP/B}$ | $68.0\text{ GFLOPS}$ | **`842.00x`** $(585\text{x} - 1211\text{x})$ | `[INJECT OFFLOAD]` |
-| **L92** | `sparse_mv_multiply()` | Depth 2 | $0.15\text{ FLOP/B}$ | $1.4\text{ GFLOPS}$ | **`12.10x`** $(8.4\text{x} - 17.4\text{x})$ | `[KEEP CPU]` |
-| **L108**| `pso_update()` | Depth 2 | $0.88\text{ FLOP/B}$ | $8.8\text{ GFLOPS}$ | **`54.62x`** $(38\text{x} - 78\text{x})$ | `[INJECT OFFLOAD]` |
-| **L124**| `compute_intensity_heavy()`| Depth 2 | $7.62\text{ FLOP/B}$ | $120.1\text{ GFLOPS}$ | **`361.71x`** $(251\text{x} - 520\text{x})$ | `[INJECT OFFLOAD]` |
-| **L141**| `conv_layer_forward()` | Depth 7 | $1.94\text{ FLOP/B}$ | $19.5\text{ GFLOPS}$ | **`252.23x`** $(175\text{x} - 363\text{x})$ | `[INJECT OFFLOAD]` |
-| **L162**| `matrix_transpose()` | Depth 2 | $0.50\text{ FLOP/B}$ | $4.0\text{ GFLOPS}$ | **`19.66x`** $(13.6\text{x} - 28.3\text{x})$ | `[INJECT OFFLOAD]` |
-
----
-
-## Live Interactive Terminal UI
-
-```
-┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│                                CERBERUS GPU PARALLELIZATION COST MODEL                                      │
-│  Host CPU      : AMD Ryzen 5 7535HS (6 Cores / 12 Threads @ 3.30 GHz, AVX2 SIMD)                            │
-│  Target GPU    : AMD Radeon 660M (Unified Memory, 2.66 TFLOPS, 89.6 GB/s Bus)                                │
-│  Cost Model    : Physical XGBoost + TreeSHAP (Trained on 2,318 runs -- CV ROC-AUC: 0.967)                    │
-└──────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-
-                          Loop Region Profitability & Safety Analysis
-┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━┓
-┃ Region                      ┃ Trip / Depth ┃ Arithmetic Intensity┃ Roofline Ceiling ┃ Predicted Speedup ┃ Gating Decision  ┃
-┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━┩
-│ matrix_multiply() (L15-23)  │ 8,000,000 / 3│ 0.67 FLOP/Byte      │ 3.1 GFLOPS       │ 11.81x (95% CI)   │ [INJECT OFFLOAD] │
-│ parallel_reduction() (L29)  │    10,000 / 1│ 0.75 FLOP/Byte      │ 11.8 GFLOPS      │ 0.26x (Slowdown)  │ [KEEP CPU]       │
-│ fft() (L75-84)              │   262,144 / 3│ 6.75 FLOP/Byte      │ 68.0 GFLOPS      │ 842.00x (Compute) │ [INJECT OFFLOAD] │
-│ unsafe_loop_race() (L180)   │    50,000 / 1│ 0.25 FLOP/Byte      │ 2.0 GFLOPS       │ 0.00x (Unsafe)    │ [REJECT: UNSAFE] │
-└─────────────────────────────┴──────────────┴─────────────────────┴──────────────────┴───────────────────┴──────────────────┘
-  9 GPU-Profitable  |  1 CPU-Optimal  |  1 Unsafe (Race Hazard)
-
-Select an action:
-  [1] Explain Bottlenecks & Audit (TreeSHAP & Roofline)
-  [2] Workload Scaling Crossover Sweep (N=100 to 10M)
-  [3] Inject GPU Pragmas & Save Report (OpenMP / OpenACC)
-  [q] Exit
-```
-
----
 
 ## Quickstart & Usage Guide
 
@@ -375,14 +283,21 @@ Cerberus/
 │   ├── cli.py                         # Rich Interactive Terminal User Interface
 │   └── trained_model.pkl              # Production XGBoost Model Weights
 ├── dataset/                           # Multi-Hardware Empirical Silicon Datasets
-│   ├── new_merged_dataset.csv         # Master Merged Dataset (2,318 runs across 5 targets)
+│   ├── dataset_merged.csv             # Master Merged Dataset (2,318 runs across 5 targets)
 │   ├── nvidia_rtx3050.csv             # NVIDIA RTX 3050 Laptop dGPU (421 runs)
 │   ├── amd_radeon760m.csv             # AMD Radeon 760M APU iGPU (421 runs)
 │   ├── dataset_macos.csv              # Apple macOS AMD Radeon Pro 5300M (421 runs)
 │   ├── colab_dataset.csv              # Google Colab Tesla T4 Cloud GPU (421 runs)
 │   └── dataset.csv                    # Baseline Integrated APU (634 runs)
 ├── benchmarks/                        # Benchmark & Test Kernels
-│   ├── synthetic/                     # C/C++ Kernels (MatMul, Stencils, FFT, N-Body)
+│   ├── synthetic/                     # C/C++ Kernels (MatMul, Stencils, Stress Tests)
+│   │   ├── sample_loops.c             # Reference C loop suite
+│   │   ├── sample_loops_offloaded.c   # OpenMP offloaded C loops + optimization report
+│   │   ├── sample_cpp_loops.cpp       # Reference C++ loop suite
+│   │   ├── sample_cpp_loops_offloaded.cpp
+│   │   ├── test1.cpp / test1_acc.cpp  # Matrix kernel + OpenACC variant + reports
+│   │   ├── test1_offloaded.cpp        # OpenMP offloaded matrix kernel + report
+│   │   └── chaotic_esoteric_stress.cpp# Adversarial stress kernel suite
 │   └── suite.py                       # End-to-End Validation Benchmark Harness
 ├── scripts/                           # Training & Data Collection Pipelines
 │   ├── collect_data.py                # Live Silicon Data Collection Pipeline
@@ -394,19 +309,11 @@ Cerberus/
 │   ├── test_parser.py                 # Feature Extraction Unit Tests
 │   ├── test_safety.py                 # Loop-Carried Dependency Safety Hazard Tests
 │   └── test_transformer.py            # OpenMP Directive Synthesis Tests
-├── docs/                              # Comprehensive Technical Documentation & Pitch Guides
-│   ├── STUDY_ROADMAP.md               # 6-Phase Master Study Roadmap
-│   ├── 01_HARDWARE_EXPLANATION.md     # Deep-Dive: Hardware Engine & OpenCL Probing
-│   ├── 02_CLANG_PARSER_EXPLANATION.md # Deep-Dive: LLVM Clang AST & Memory Heuristics
-│   ├── 03_MODEL_EXPLANATION.md        # Deep-Dive: Two-Stage Hurdle Model & TreeSHAP
-│   ├── 03_ROOFLINE_AND_MONOTONIC...md # Deep-Dive: Williams Roofline & Physics Constraints
-│   ├── 04_ADVISOR_EXPLANATION.md      # Deep-Dive: Local Qwen2.5-Coder SLM & AST Advisor
-│   ├── 05_TRANSFORMER_EXPLANATION.md  # Deep-Dive: Source-to-Source OpenMP Rewriter
-│   ├── 06_OPENCL_RUNNER_AND_BENCH...md# Deep-Dive: 20 Kernel Suite & OpenCL Profiler
-│   ├── 07_CLI_AND_TRAINING_PIPELINE.md# Deep-Dive: Interactive CLI & Training Runbook
-│   ├── HACKATHON_7MIN_PITCH_SCRIPT.md # 7-Minute Two-Part Hackathon Presentation Script
-│   ├── DEMO_RUNBOOK_AND_EXPLANATION.md# Live Terminal Demo Execution Runbook
-│   └── PRESENTATION_SCRIPT.md         # 14-Slide Presentation Deck Reference
+├── assets/
+│   └── cerberus_banner.png            # Project Banner
+├── cerberus_yt_thumbnail.jpg          # YouTube Thumbnail
+├── requirements.txt                   # Python Dependencies
+├── setup.py                           # Package Build Configuration
 └── README.md                          # Master Project Overview & Quickstart
 ```
 
