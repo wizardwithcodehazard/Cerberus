@@ -44,3 +44,5 @@ ps4.txt
 markovlens.docx
 markovlens.pdf
 
+# Local documentation (study guides, pitch scripts — not for GitHub)
+docs/

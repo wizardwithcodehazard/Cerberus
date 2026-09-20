@@ -34,7 +34,7 @@ def render_scan_table(loops: List[LoopFeature], results: List[Tuple[LoopFeature,
     table.add_column("Region", style="cyan", justify="left", max_width=30 if compact else 40)
     table.add_column("Trip / Depth", style="magenta", justify="right")
     if not compact:
-        table.add_column("Effective AI\n(Est. Cache Reuse)", justify="right")
+        table.add_column("Arithmetic Intensity\n(Est. Cache Reuse)", justify="right")
         table.add_column("Roofline Upper Bound\n(Theoretical Peak)", justify="right")
     table.add_column("Predicted Speedup\n(ML Cost Model)", justify="right", style="bold")
     table.add_column("Gating Decision", justify="center")
@@ -103,8 +103,8 @@ def show_loop_audit(loop: LoopFeature, pred: PredictionResult, hw: HardwareProfi
   Stride Regularity         : {loop.stride_regularity:.2f}
 
 [bold cyan]WILLIAMS ROOFLINE THEORETICAL CEILINGS[/bold cyan]
-  Raw Operational AI        : {loop.raw_arithmetic_intensity:.2f} FLOP/Byte
-  Estimated Effective AI    : {loop.arithmetic_intensity:.2f} FLOP/Byte
+  Raw Arithmetic Intensity  : {loop.raw_arithmetic_intensity:.2f} FLOP/Byte
+  Effective Arith. Intensity: {loop.arithmetic_intensity:.2f} FLOP/Byte
   GPU Memory Bandwidth      : {hw.bus_bandwidth_gbps} GB/s ({'Shared System Memory' if hw.unified_memory else 'PCIe Bus'})
   GPU Memory Ceiling        : {mem_ceiling_gflops:.1f} GFLOPS
   GPU Compute Peak          : {peak_gflops:.1f} GFLOPS ({hw.peak_tflops} TFLOPS)
@@ -202,7 +202,7 @@ def generate_markdown_report(source_file: str, results: List[Tuple[LoopFeature, 
         f"- **CPU Sequential Preserved (Slowdowns Prevented):** {cpu_count} regions",
         f"- **Unsafe Race Hazards Blocked:** {unsafe_count} regions\n",
         f"## Loop Optimization Gating Table\n",
-        f"| Region | Depth | Dynamic Iterations | Effective AI | Roofline Attainable | Predicted Speedup (95% CI) | Gating Decision |",
+        f"| Region | Depth | Dynamic Iterations | Arithmetic Intensity | Roofline Attainable | Predicted Speedup (95% CI) | Gating Decision |",
         f"| :--- | :---: | :---: | :---: | :---: | :---: | :---: |"
     ]
 
@@ -546,6 +546,8 @@ def main(source_file: Optional[str], output_file: str, report_file: Optional[str
             transformer = OpenMPTransformer(model, hw, dialect=dialect)
             default_out = f"{os.path.splitext(source_file)[0]}_offloaded.cpp"
             save_path = Prompt.ask("Save output to", default=default_out)
+            if save_path.strip().lower() in ("y", "yes", ""):
+                save_path = default_out
             inject_and_save(source_file, transformer, results, hw, model, threshold, save_path, dialect=dialect)
         elif choice == "q":
             console.print("[dim]Exiting Cerberus.[/dim]")
