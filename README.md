@@ -171,7 +171,9 @@ Unconstrained tree models can make physically impossible predictions. Cerberus s
 
 #### Uncertainty Quantification (95% Confidence Intervals)
 Every continuous speedup prediction includes statistical error bounds based on 5-fold cross-validation RMSE ($\sigma_{\text{RMSE}} = 0.285$):
-$$\text{CI}_{95} = [ 2^{\hat{y} - 1.96\sigma},\quad 2^{\hat{y} + 1.96\sigma} ]$$
+
+$$\text{CI}_{95} = [ 2^{\hat{y} - 1.96\sigma}, \quad 2^{\hat{y} + 1.96\sigma} ]$$
+
 
 ---
 
@@ -186,17 +188,18 @@ Cerberus computes exact game-theoretic Shapley values using `TreeExplainer`, bre
 
 #### The Williams Roofline Model
 Cerberus computes the hardware execution ceiling:
-$$\text{Attainable GFLOPS} = \min(\text{Peak GFLOPS}_{\text{GPU}},\quad \text{Arithmetic Intensity} \times \text{Bandwidth}_{\text{Eff}})$$
+
+$$\text{Attainable GFLOPS} = \min(\text{Peak GFLOPS}_{\text{GPU}}, \quad \text{Arithmetic Intensity} \times \text{Bandwidth}_{\text{Eff}})$$
+
 $$\text{Bandwidth}_{\text{Eff}} = \text{Bus BW} \times \text{Coalescing} \times \text{Stride Regularity}$$
+
 
 ---
 
 ### 5. Automated Source-to-Source OpenMP / OpenACC Synthesizer
 When a loop is profitable, Cerberus rewrites the source code without destroying existing structure:
-1. **Dynamic Runtime Crossover Guards:** Solves for the inflection point $N^*$ where GPU speed matches CPU:
-   $$\texttt{if(N >= 2048)}$$
-2. **Directional Memory Transfers:** Analyzes AST read/write sets to emit minimal transfers:
-   $$\texttt{map(to: A, B) map(from: C)}$$
+1. **Dynamic Runtime Crossover Guards:** Solves for the inflection point $N^*$ where GPU speed matches CPU. Synthesized clause: `if(N >= 2048)`
+2. **Directional Memory Transfers:** Analyzes AST read/write sets to emit minimal transfers: `map(to: A[0:N*N], B[0:N*N]) map(from: C[0:N*N])`
 3. **Atomic Reduction Clauses:** Detects accumulator variables and injects `reduction(+:sum)`.
 
 ---
