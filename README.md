@@ -5,11 +5,11 @@
 # Cerberus: Intelligent ML-Guided GPU Offload Cost Model & Parallelizing Compiler
 
 <p align="center">
-  <a href="https://github.com/wizardwithcodehazard/Cerberus"><img src="https://img.shields.io/badge/SegFault%202026-Track%20P04-0052FF.svg?style=for-the-badge&logo=cplusplus&logoColor=white" alt="SegFault 2026 Track P04" /></a>
-  <a href="https://github.com/wizardwithcodehazard/Cerberus"><img src="https://img.shields.io/badge/Team-SeePlusPlus-7928CA.svg?style=for-the-badge" alt="Team SeePlusPlus" /></a>
+  <a href="https://github.com/wizardwithcodehazard/Cerberus"><img src="https://img.shields.io/badge/LLVM-Clang%20AST-blue.svg?style=for-the-badge&logo=llvm&logoColor=white" alt="LLVM Clang AST" /></a>
+  <a href="https://github.com/wizardwithcodehazard/Cerberus"><img src="https://img.shields.io/badge/Directives-OpenMP%204.5%2B%20%7C%20OpenACC-red.svg?style=for-the-badge" alt="OpenMP & OpenACC" /></a>
   <a href="https://github.com/wizardwithcodehazard/Cerberus"><img src="https://img.shields.io/badge/Gating%20Accuracy-91.33%25-00DF72.svg?style=for-the-badge" alt="Accuracy 91.33%" /></a>
   <a href="https://github.com/wizardwithcodehazard/Cerberus"><img src="https://img.shields.io/badge/ROC--AUC-0.967-brightgreen.svg?style=for-the-badge" alt="ROC-AUC 0.967" /></a>
-  <a href="https://github.com/wizardwithcodehazard/Cerberus"><img src="https://img.shields.io/badge/Dataset-2%2C318%20Silicon%20Runs-FF6B00.svg?style=for-the-badge" alt="Dataset 2,318 Runs" /></a>
+  <a href="https://github.com/wizardwithcodehazard/Cerberus"><img src="https://img.shields.io/badge/Validation-2%2C318%20Silicon%20Runs-FF6B00.svg?style=for-the-badge" alt="Dataset 2,318 Runs" /></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/Python-3.9+-3776AB.svg?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.9+" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge" alt="License: MIT" /></a>
 </p>
@@ -18,13 +18,6 @@
 
 > **The intelligent compiler gatekeeper guarding the GPU offload boundary.**  
 > Cerberus analyzes C/C++ loops using **LLVM Clang ASTs**, discovers live silicon registers via **direct C-ABI OpenCL**, predicts offload profitability using a **Physics-Constrained Two-Stage Hurdle XGBoost Model**, explains decisions via **TreeSHAP & Williams Roofline Models**, and synthesizes optimized **OpenMP 4.5+ / OpenACC directives** with dynamic runtime crossover thresholds.
-
----
-
-### Team & Hackathon Details
-* **Track:** *SegFault 2026 — Track P04: Parallelization Profitability Predictor for GPU*
-* **Team Name:** **SeePlusPlus**
-* **Authors:** **Vedant Patil** (Compiler & Hardware Lead) & **Sahil Rane** (Machine Learning & Performance Lead)
 
 ---
 
@@ -59,44 +52,52 @@ However, **GPU-Safe != GPU-Profitable**. Naive GPU offloading frequently makes c
 ## End-to-End System Architecture
 
 ```mermaid
+%%{init: {
+  "flowchart": {
+    "htmlLabels": true,
+    "nodeSpacing": 40,
+    "rankSpacing": 60,
+    "wrappingWidth": 240
+  }
+}}%%
 flowchart TD
     subgraph FrontEnd ["1. Semantic Compiler Front-End"]
-        SRC["C / C++ Source Code"] --> CLANG["LLVM libclang C-Index Engine\nwith AST Regex Fallback"]
+        SRC["C / C++ Source Code"] --> CLANG["LLVM libclang C-Index Engine<br/>with AST Regex Fallback"]
         CLANG --> AST["Abstract Syntax Tree"]
-        AST --> FEAT["Extract 12 Static Loop Features\nTrip Count, FLOPs, Memory, Coalescing, RAW Hazards"]
+        AST --> FEAT["Extract 12 Static Loop Features<br/>Trip Count, FLOPs, Memory,<br/>Coalescing, RAW Hazards"]
     end
 
     subgraph HardwareDiscovery ["2. Physical Silicon Probing Engine"]
-        REG["Physical Silicon Registers"] --> OPENCL["Direct C-ABI OpenCL via ctypes\nCPU ISA + GPU Shader Discovery"]
-        OPENCL --> HW["Hardware Profile\nPeak TFLOPS, Interconnect BW, Unified Memory, Vendor ALUs"]
+        REG["Physical Silicon Registers"] --> OPENCL["Direct C-ABI OpenCL via ctypes<br/>CPU ISA + GPU Shader Discovery"]
+        OPENCL --> HW["Hardware Profile<br/>Peak TFLOPS, Interconnect BW,<br/>Unified Memory, Vendor ALUs"]
     end
 
-    FEAT --> UNIFIED["Unified 21-Dimensional Feature Vector\n+ Williams Roofline Theoretical Upper Bound"]
+    FEAT --> UNIFIED["Unified 21-Dimensional Feature Vector<br/>+ Williams Roofline Theoretical<br/>Upper Bound"]
     HW --> UNIFIED
 
     subgraph MLEngine ["3. Physics-Constrained AI Cost Model"]
         UNIFIED --> HURDLE["Two-Stage Hurdle XGBoost Model"]
-        HURDLE --> STAGE1["Stage 1 - Gating Classifier\nP(Profitable) >= 0.5"]
-        HURDLE --> STAGE2["Stage 2 - Speedup Regressor\nlog2(Speedup) with Monotonic Constraints"]
-        STAGE1 --> UQ["Uncertainty Quantification\n95% Confidence Interval"]
+        HURDLE --> STAGE1["Stage 1 - Gating Classifier<br/>P(Profitable) &gt;= 0.5"]
+        HURDLE --> STAGE2["Stage 2 - Speedup Regressor<br/>log2(Speedup) with<br/>Monotonic Constraints"]
+        STAGE1 --> UQ["Uncertainty Quantification<br/>95% Confidence Interval"]
         STAGE2 --> UQ
     end
 
     subgraph Explainability ["4. Explainability & Physics Audit"]
-        UQ --> SHAP["TreeSHAP Game-Theoretic Attribution\nExact Factor Points"]
-        UQ --> ROOF["Williams Roofline Model\nMemory-Bound vs. Compute-Bound GFLOPS"]
+        UQ --> SHAP["TreeSHAP Game-Theoretic<br/>Attribution<br/>Exact Factor Points"]
+        UQ --> ROOF["Williams Roofline Model<br/>Memory-Bound vs.<br/>Compute-Bound GFLOPS"]
     end
 
     subgraph Synthesis ["5. Code Synthesis & Diagnostics"]
-        SHAP --> DECISION{"Profitable & Safe?"}
+        SHAP --> DECISION{"Profitable &amp; Safe?"}
         ROOF --> DECISION
-        DECISION -- "NO / UNSAFE" --> CPU["KEEP CPU or REJECT UNSAFE"]
-        CPU --> ADVISOR["Offline AI Optimization Advisor\nLocal Qwen2.5-Coder SLM or AST Fallback"]
-        DECISION -- "YES - PROFITABLE" --> REWRITER["Source-to-Source OpenMP 4.5+ Transformer"]
-        REWRITER --> PRAGMA["Inject pragma omp target teams distribute parallel for"]
-        REWRITER --> DYN["Dynamic Crossover Guard: if N >= Crossover"]
-        REWRITER --> MAP["Directional Memory Clauses: map to / map from"]
-        REWRITER --> REPORT["Generate Compiler Optimization Audit"]
+        DECISION -- "NO / UNSAFE" --> CPU["KEEP CPU or<br/>REJECT UNSAFE"]
+        CPU --> ADVISOR["Offline AI Optimization Advisor<br/>Local Qwen2.5-Coder SLM<br/>or AST Fallback"]
+        DECISION -- "YES - PROFITABLE" --> REWRITER["Source-to-Source<br/>OpenMP 4.5+ Transformer"]
+        REWRITER --> PRAGMA["Inject pragma omp target<br/>teams distribute parallel for"]
+        REWRITER --> DYN["Dynamic Crossover Guard:<br/>if N &gt;= Crossover"]
+        REWRITER --> MAP["Directional Memory Clauses:<br/>map to / map from"]
+        REWRITER --> REPORT["Generate Compiler<br/>Optimization Audit"]
     end
 ```
 
@@ -311,7 +312,6 @@ Cerberus/
 │   └── test_transformer.py            # OpenMP Directive Synthesis Tests
 ├── assets/
 │   └── cerberus_banner.png            # Project Banner
-├── cerberus_yt_thumbnail.jpg          # YouTube Thumbnail
 ├── requirements.txt                   # Python Dependencies
 ├── setup.py                           # Package Build Configuration
 └── README.md                          # Master Project Overview & Quickstart
@@ -319,20 +319,6 @@ Cerberus/
 
 ---
 
-## License & Citation
+## License
 
 This project is licensed under the **MIT License** — see the [LICENSE](LICENSE) file for details.
-
-```bibtex
-@software{cerberus2026,
-  author = {Patil, Vedant and Rane, Sahil},
-  title = {Cerberus: Intelligent ML-Guided GPU Offload Cost Model & Parallelizing Compiler},
-  year = {2026},
-  url = {https://github.com/wizardwithcodehazard/Cerberus},
-  institution = {SegFault 2026 Hackathon, Track P04}
-}
-```
-
-<p align="center">
-  <b>Built by Team SeePlusPlus (Vedant Patil & Sahil Rane) for SegFault 2026</b>
-</p>
