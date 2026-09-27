@@ -79,5 +79,8 @@ ps4.txt
 markovlens.docx
 markovlens.pdf
 
+# Media / presentation assets — not part of the source distribution
+cerberus_yt_thumbnail.jpg
+
 # Local documentation (study guides, pitch scripts — not for GitHub)
 docs/

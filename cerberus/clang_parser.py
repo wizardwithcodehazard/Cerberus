@@ -524,10 +524,24 @@ class ClangASTParser:
                 if array_name in arrays_written:
                     return False, f"Unsafe: Loop-carried data dependency detected on array '{array_name}' across iterations"
 
-        # 3. Dynamic pointer aliasing check (e.g., restricted pointers)
-        if len(arrays_written) > 0 and len(arrays_read.intersection(arrays_written)) > 0 and not has_reduction:
-            # Self-update like A[i] = A[i] * 2 is safe, but A[i] = A[j] across different indices requires check
-            pass
+        # 3. Read-write alias check: if the same array is both read and written
+        #    and there is no reduction pattern, we cannot statically prove that
+        #    iteration i does not read a value written by iteration j (j != i).
+        #    Conservative safe decision: reject unless a simple in-place update
+        #    pattern (A[i] op= expr not involving A) is confirmed.
+        if arrays_written and not has_reduction:
+            aliased = arrays_read.intersection(arrays_written)
+            if aliased:
+                # Allow A[i] = A[i] * scalar (same-index in-place update) but
+                # we cannot distinguish that from A[i] = A[N-i] here, so we
+                # conservatively reject and let the user add #pragma omp simd
+                # or __restrict__ if they know the access is safe.
+                return (
+                    False,
+                    f"Unsafe: Array(s) {aliased} appear in both read and write "
+                    f"positions — possible aliasing across iterations. "
+                    f"Add 'restrict' qualifiers or refactor to separate input/output arrays."
+                )
 
         return True, "Safe: Iteration domain is embarrassingly parallel"
 

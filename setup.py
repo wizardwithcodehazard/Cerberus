@@ -18,7 +18,6 @@ setup(
     entry_points={
         "console_scripts": [
             "cerberus = cerberus.cli:main",
-            "markovlens = cerberus.cli:main"
         ]
     },
     python_requires=">=3.9",

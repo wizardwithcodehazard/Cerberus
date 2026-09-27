@@ -1,4 +1,4 @@
-"""Empirical Ground-Truth Dataset Generator for MarkovLens.
+"""Empirical Ground-Truth Dataset Generator for Cerberus.
 
 Compiles and measures real wall-clock runtimes across benchmark kernels on CPU vs. GPU,
 extracts static AST loop features, and outputs dataset.csv.
@@ -443,7 +443,7 @@ __kernel void param_kernel(__global const float *a, __global const float *b, __g
     console.print(f"\n[bold green][SUCCESS] Saved {len(df)} empirical records to {output_csv}[/bold green]")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Collect empirical benchmark data for MarkovLens.")
+    parser = argparse.ArgumentParser(description="Collect empirical benchmark data for Cerberus.")
     parser.add_argument("--device", choices=list(PRESET_PROFILES.keys()) + ["auto"], default="auto",
                         help="Target device profile to benchmark.")
     parser.add_argument("--platform", choices=["auto", "nvidia", "amd", "intel"], default="auto",

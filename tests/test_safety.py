@@ -60,5 +60,50 @@ def test_parallel_safety_analysis():
 
     print("\n[SUCCESS] All loop dependency & safety tests passed cleanly!")
 
+
+def test_aliasing_safety():
+    """P0-1 regression: read-write aliasing must be flagged as unsafe."""
+    parser = CLoopParser()
+
+    # WAR dependency: A[i] reads A[N-i-1] — cannot be parallelised safely
+    code_alias = """
+    void reverse_in_place(float *A, int N) {
+        for (int i = 0; i < N / 2; i++) {
+            float tmp = A[i];
+            A[i] = A[N - i - 1];
+            A[N - i - 1] = tmp;
+        }
+    }
+    """
+    loops = parser.parse_source(code_alias)
+    assert len(loops) == 1, "Expected 1 loop to be detected"
+    print("\n=== Test 4: WAR Aliasing — Reverse In-Place ===")
+    print("Parallel Safe:", loops[0].is_parallel_safe)
+    print("Reason:", loops[0].safety_reason)
+    assert loops[0].is_parallel_safe is False, (
+        "Reverse-in-place reads and writes A[] — must be flagged UNSAFE!"
+    )
+
+    # Safe: separate input and output arrays — no aliasing
+    code_no_alias = """
+    void reverse_copy(float *src, float *dst, int N) {
+        for (int i = 0; i < N; i++) {
+            dst[i] = src[N - i - 1];
+        }
+    }
+    """
+    loops_safe = parser.parse_source(code_no_alias)
+    assert len(loops_safe) == 1
+    print("\n=== Test 5: Reverse-Copy — Separate Arrays (Safe) ===")
+    print("Parallel Safe:", loops_safe[0].is_parallel_safe)
+    print("Reason:", loops_safe[0].safety_reason)
+    assert loops_safe[0].is_parallel_safe is True, (
+        "Separate src/dst arrays have no aliasing — must be flagged SAFE!"
+    )
+
+    print("\n[SUCCESS] Aliasing safety tests passed!")
+
+
 if __name__ == "__main__":
     test_parallel_safety_analysis()
+    test_aliasing_safety()
