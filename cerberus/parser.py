@@ -301,8 +301,10 @@ class CLoopParser:
             stride_regularity = min(stride_regularity, self._check_index_stride(dim1_expr, inner_var))
             coalescing_score = min(coalescing_score, self._check_coalescing(dim1_expr, dim2_expr, inner_var, nesting_depth))
 
-        # Check Array Reads (RHS)
-        all_reads = re.findall(r'([a-zA-Z_][a-zA-Z0-9_]*)\s*\[([^\]]+)\](?:\s*\[([^\]]+)\])?', arith_block)
+        # Check Array Reads (RHS): strip LHS write targets from arith_block first
+        # so written array names on LHS are not erroneously classified as reads
+        rhs_block = re.sub(r'[a-zA-Z_][a-zA-Z0-9_]*\s*\[[^\]]+\](?:\s*\[([^\]]+)\])?\s*=', '=', arith_block)
+        all_reads = re.findall(r'([a-zA-Z_][a-zA-Z0-9_]*)\s*\[([^\]]+)\](?:\s*\[([^\]]+)\])?', rhs_block)
         for match in all_reads:
             arr_name = match[0]
             dim1_expr = match[1]
@@ -354,19 +356,6 @@ class CLoopParser:
             if not is_reset_inside and cand_var not in (arrays_written | arrays_read):
                 has_reduction = True
                 reduction_var = cand_var
-
-        # 5b. Read-write alias check — runs AFTER arrays_read/arrays_written and has_reduction
-        #     are fully known. The early _check_loop_carried_dependencies call (line 260) runs
-        #     before array sets are built, so this is the correct place to check aliasing.
-        if is_safe and not has_reduction:
-            aliased = arrays_read.intersection(arrays_written)
-            if aliased:
-                is_safe = False
-                safety_reason = (
-                    f"Unsafe: Array(s) {aliased} appear in both read and write "
-                    f"positions — possible aliasing across iterations. "
-                    f"Add 'restrict' qualifiers or refactor to separate input/output arrays."
-                )
 
         return LoopFeature(
             function_name=fn_name,
@@ -427,7 +416,8 @@ class CLoopParser:
             if op in ("+=", "-=", "*=", "/="):
                 arrays_read.add(m[0])
 
-        all_reads = re.findall(r'([a-zA-Z_][a-zA-Z0-9_]*)\s*\[([^\]]+)\](?:\s*\[([^\]]+)\])?', arith_block)
+        rhs_block = re.sub(r'[a-zA-Z_][a-zA-Z0-9_]*\s*\[[^\]]+\](?:\s*\[([^\]]+)\])?\s*=', '=', arith_block)
+        all_reads = re.findall(r'([a-zA-Z_][a-zA-Z0-9_]*)\s*\[([^\]]+)\](?:\s*\[([^\]]+)\])?', rhs_block)
         for m in all_reads:
             arrays_read.add(m[0])
 
@@ -452,18 +442,6 @@ class CLoopParser:
         arithmetic_intensity = total_flops / float(memory_footprint_bytes)
 
         branch_count = len(re.findall(r'\b(if|switch)\s*\(', arith_block))
-
-        # Aliasing check — same conservative logic as for-loop path.
-        # Must run after arrays_read/arrays_written are populated.
-        if is_safe:
-            aliased = arrays_read.intersection(arrays_written)
-            if aliased:
-                is_safe = False
-                safety_reason = (
-                    f"Unsafe: Array(s) {aliased} appear in both read and write "
-                    f"positions — possible aliasing across iterations. "
-                    f"Add 'restrict' qualifiers or refactor to separate input/output arrays."
-                )
 
         return LoopFeature(
             function_name=fn_name,
@@ -589,7 +567,7 @@ class CLoopParser:
         return 1.0      # Contiguous Stride-1 Access
 
     def _check_loop_carried_dependencies(self, block: str, loop_vars: List[str]) -> Tuple[bool, str]:
-        """Detects loop-carried Read-After-Write (RAW) hazards."""
+        """Detects loop-carried Read-After-Write (RAW), Write-After-Read (WAR), and stage hazards."""
         if not loop_vars:
             return True, "Safe: Independent iterations"
 
@@ -603,14 +581,25 @@ class CLoopParser:
             if re.search(r'\[[^\]]+\]\s*[\+\-\*\/]?=', block):
                 return False, "Hazard: Logarithmic butterfly stage-carried dependency across sequential passes (Outer loop is serial)"
 
-        # 2. Pattern: Writing to A[i] and reading from A[i-1] (Loop-carried RAW dependence)
-        lhs_arrs = re.findall(r'([a-zA-Z_][a-zA-Z0-9_]*)\s*\[[^\]]+\]\s*=', block)
-        if lhs_arrs:
-            written_arr = lhs_arrs[0]
+        # 2. Pattern: Writing to A[...] and reading from A[...] with loop-carried dependencies (RAW / WAR)
+        lhs_matches = re.findall(r'([a-zA-Z_][a-zA-Z0-9_]*)\s*\[([^\]]+)\](?:\s*\[([^\]]+)\])?\s*[\+\-\*\/]?=', block)
+        written_arrays = {m[0] for m in lhs_matches}
+
+        for written_arr in written_arrays:
+            # 2a. Loop-carried RAW dependence: A[i - 1], A[i + 1], etc.
             offset_reads = re.findall(rf'\b{written_arr}\s*\[\s*{primary_var}\s*[\+\-]\s*([1-9][0-9]*)\s*\]', block)
             if offset_reads:
                 dist = offset_reads[0]
                 return False, f"Hazard: Loop-carried RAW dependency detected on {written_arr}[{primary_var} - {dist}] (Sequential constraint)"
+
+            # 2b. Transformed/reverse indexing on written array (e.g. A[N - i - 1], A[... - i ...], WAR hazard)
+            subscripts = re.findall(rf'\b{written_arr}\s*\[([^\]]+)\]', block)
+            for sub in subscripts:
+                sub_clean = sub.strip()
+                if re.search(rf'[-+*\/]\s*{re.escape(primary_var)}\b', sub_clean) or \
+                   re.search(rf'\b{re.escape(primary_var)}\s*[*\/]', sub_clean) or \
+                   (primary_var in sub_clean and re.search(r'\b[A-Z_a-z][A-Z_a-z0-9]*\s*-\s*' + re.escape(primary_var), sub_clean)):
+                    return False, f"Hazard: Loop-carried WAR / aliasing dependency detected on {written_arr}[{sub_clean}] (Cross-iteration hazard)"
 
         # 3. Check for pointer aliasing with restrict
         if re.search(r'\*([a-zA-Z_][a-zA-Z0-9_]*)\s*\+\+', block):

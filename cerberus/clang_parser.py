@@ -524,24 +524,16 @@ class ClangASTParser:
                 if array_name in arrays_written:
                     return False, f"Unsafe: Loop-carried data dependency detected on array '{array_name}' across iterations"
 
-        # 3. Read-write alias check: if the same array is both read and written
-        #    and there is no reduction pattern, we cannot statically prove that
-        #    iteration i does not read a value written by iteration j (j != i).
-        #    Conservative safe decision: reject unless a simple in-place update
-        #    pattern (A[i] op= expr not involving A) is confirmed.
-        if arrays_written and not has_reduction:
-            aliased = arrays_read.intersection(arrays_written)
-            if aliased:
-                # Allow A[i] = A[i] * scalar (same-index in-place update) but
-                # we cannot distinguish that from A[i] = A[N-i] here, so we
-                # conservatively reject and let the user add #pragma omp simd
-                # or __restrict__ if they know the access is safe.
-                return (
-                    False,
-                    f"Unsafe: Array(s) {aliased} appear in both read and write "
-                    f"positions — possible aliasing across iterations. "
-                    f"Add 'restrict' qualifiers or refactor to separate input/output arrays."
-                )
+        # 3. Check for loop-carried WAR / transformed index dependencies (e.g. A[i] = A[N-i-1])
+        if iter_var:
+            for arr in arrays_written:
+                subscripts = re.findall(rf'\b{arr}\s*\[([^\]]+)\]', loop_source)
+                for sub in subscripts:
+                    sub_clean = sub.strip()
+                    if re.search(rf'[-+*\/]\s*{re.escape(iter_var)}\b', sub_clean) or \
+                       re.search(rf'\b{re.escape(iter_var)}\s*[*\/]', sub_clean) or \
+                       (iter_var in sub_clean and re.search(r'\b[A-Z_a-z][A-Z_a-z0-9]*\s*-\s*' + re.escape(iter_var), sub_clean)):
+                        return False, f"Unsafe: Loop-carried data dependency detected on array '{arr}[{sub_clean}]' across iterations"
 
         return True, "Safe: Iteration domain is embarrassingly parallel"
 
