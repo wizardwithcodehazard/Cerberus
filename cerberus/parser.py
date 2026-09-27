@@ -355,6 +355,19 @@ class CLoopParser:
                 has_reduction = True
                 reduction_var = cand_var
 
+        # 5b. Read-write alias check — runs AFTER arrays_read/arrays_written and has_reduction
+        #     are fully known. The early _check_loop_carried_dependencies call (line 260) runs
+        #     before array sets are built, so this is the correct place to check aliasing.
+        if is_safe and not has_reduction:
+            aliased = arrays_read.intersection(arrays_written)
+            if aliased:
+                is_safe = False
+                safety_reason = (
+                    f"Unsafe: Array(s) {aliased} appear in both read and write "
+                    f"positions — possible aliasing across iterations. "
+                    f"Add 'restrict' qualifiers or refactor to separate input/output arrays."
+                )
+
         return LoopFeature(
             function_name=fn_name,
             line_start=line_start,
@@ -439,6 +452,18 @@ class CLoopParser:
         arithmetic_intensity = total_flops / float(memory_footprint_bytes)
 
         branch_count = len(re.findall(r'\b(if|switch)\s*\(', arith_block))
+
+        # Aliasing check — same conservative logic as for-loop path.
+        # Must run after arrays_read/arrays_written are populated.
+        if is_safe:
+            aliased = arrays_read.intersection(arrays_written)
+            if aliased:
+                is_safe = False
+                safety_reason = (
+                    f"Unsafe: Array(s) {aliased} appear in both read and write "
+                    f"positions — possible aliasing across iterations. "
+                    f"Add 'restrict' qualifiers or refactor to separate input/output arrays."
+                )
 
         return LoopFeature(
             function_name=fn_name,
