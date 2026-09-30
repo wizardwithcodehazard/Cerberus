@@ -97,9 +97,10 @@ flowchart TD
         REWRITER --> PRAGMA["Inject pragma omp target<br/>teams distribute parallel for"]
         REWRITER --> DYN["Dynamic Crossover Guard:<br/>if N &gt;= Crossover"]
         REWRITER --> MAP["Directional Memory Clauses:<br/>map to / map from"]
-        REWRITER --> REPORT["Generate Compiler<br/>Optimization Audit"]
-    end
 ```
+
+> [!NOTE]
+> **What Cerberus actually does:** It makes a *predictive* decision based on static analysis of your source code and your hardware's specifications. It does not compile your code, run it on the GPU, or benchmark both paths during analysis. The OpenCL integration is used only to query hardware capabilities (TFLOPS, bandwidth, unified memory) — not to execute your loops.
 
 ---
 
@@ -219,6 +220,23 @@ Cerberus was trained and validated on **2,318 physical silicon benchmark executi
 
 ---
 
+## Prerequisites & Platform Support
+
+### Prerequisites
+- **Python 3.9+**
+- **OpenCL Driver (Optional):** NVIDIA Driver (CUDA), AMD ROCm / Adrenalin, or Intel OpenCL Runtime for live silicon discovery.
+- **LLVM libclang (Optional):** `pip install libclang>=16.0.0` for deep AST analysis (automatically falls back to native parser if absent).
+- **No GPU required:** Cerberus falls back to calibrated preset hardware profiles if live GPU discovery is not available.
+
+### Platform Support Matrix
+
+| OS / Environment | Loop Parsing (Clang / Native) | ML Model Inference | Pragma Injection | Live OpenCL Probing |
+|---|:---:|:---:|:---:|:---:|
+| **Linux (x86_64 / ARM64)** | ✅ Supported | ✅ Supported | ✅ Supported | ✅ Supported (`libOpenCL.so`) |
+| **Windows (10 / 11)** | ✅ Supported | ✅ Supported | ✅ Supported | ✅ Supported (`OpenCL.dll`) |
+| **macOS (Intel / Apple Silicon)** | ✅ Supported | ✅ Supported | ✅ Supported | ⚠️ Preset Target (`--target`) |
+
+---
 
 ## Quickstart & Usage Guide
 
@@ -316,6 +334,25 @@ Cerberus/
 ├── setup.py                           # Package Build Configuration
 └── README.md                          # Master Project Overview & Quickstart
 ```
+
+---
+
+## Known Limitations
+
+- **Static analysis only:** Cerberus makes predictive decisions based on static source analysis and pre-trained empirical models. It does not compile or run your code during analysis.
+- **C/C++ only:** Fortran, Julia, CUDA, and HIP are not currently supported.
+- **macOS support:** Live OpenCL discovery is currently unavailable on macOS (requires OpenCL.framework bindings); preset target profiles or fallback models can be used instead.
+- **Model generalization:** The 91.33% accuracy is measured on the held-out fold of the training benchmark suite — generalization to complex arbitrary external codebases may vary.
+- **Dynamic control & pointer aliasing:** Loops with complex indirect aliasing, unresolvable function pointer calls, or file I/O inside the body may not be fully determined by static analysis.
+
+---
+
+## Authors
+
+Developed by **Team seeplusplus**:
+- **Sahil Rane**
+- **Vedant Patil**
+- **Gaurang**
 
 ---
 

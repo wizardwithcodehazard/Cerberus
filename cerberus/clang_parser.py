@@ -179,8 +179,15 @@ class ClangASTParser:
         unique_arrays = arrays_read.union(arrays_written)
         num_arrays = max(1, len(unique_arrays))
 
-        # Memory footprint calculations
-        memory_footprint_bytes = max(MIN_FOOTPRINT_BYTES, num_arrays * self.bytes_per_elem * trip_count)
+        # Memory footprint calculations (unique working set, not iteration count)
+        if nesting_depth >= 3:
+            unique_elements = int(round(trip_count ** (2.0 / 3.0)))
+        elif nesting_depth == 2:
+            unique_elements = int(round(trip_count ** 0.5))
+        else:
+            unique_elements = trip_count
+
+        memory_footprint_bytes = max(MIN_FOOTPRINT_BYTES, num_arrays * self.bytes_per_elem * unique_elements)
         raw_memory_traffic_bytes = max(MIN_FOOTPRINT_BYTES, (len(arrays_read) + 2 * len(arrays_written)) * self.bytes_per_elem * trip_count)
 
         # Arithmetic Intensity & Data Reuse
@@ -421,10 +428,13 @@ class ClangASTParser:
                 clang.cindex.CursorKind.COMPOUND_ASSIGNMENT_OPERATOR,
             ):
                 tokens = [t.spelling for t in cursor.get_tokens()]
-                is_assign = any(op in tokens for op in ("=", "+=", "-=", "*=", "/="))
+                is_compound = any(op in tokens for op in ("+=", "-=", "*=", "/="))
+                is_assign = is_compound or ("=" in tokens)
                 children = list(cursor.get_children())
                 if is_assign and len(children) >= 2:
                     visitor(children[0], is_lhs=True)
+                    if is_compound:
+                        visitor(children[0], is_lhs=False)
                     for rhs_child in children[1:]:
                         visitor(rhs_child, is_lhs=False)
                     return

@@ -68,7 +68,28 @@ def test_dynamic_if_crossover_generation():
     assert "if(N >=" in acc_code
     assert "copyin(" in acc_code
 
+def test_transformer_with_clang_backend():
+    source = """
+    void vec_add(float* A, float* B, float* C, int N) {
+        for (int i = 0; i < N; i++) {
+            C[i] = A[i] + B[i];
+        }
+    }
+    """
+    model = ProfitabilityModel()
+    hw = PRESET_PROFILES["dgpu_rtx3060"]
+
+    # Test with Clang backend
+    transformer = GPUPragmaTransformer(
+        model, hw, dialect="openmp", parser_backend="clang", parser_params={"N": 1000000}
+    )
+    code, decisions = transformer.transform_source(source, speedup_threshold=1.0)
+    assert len(decisions) == 1
+    assert decisions[0][2] is True
+    assert "#pragma omp target teams distribute parallel for" in code
+
 if __name__ == "__main__":
     test_openmp_and_openacc_transformation()
     test_dynamic_if_crossover_generation()
+    test_transformer_with_clang_backend()
     print("All transformer tests passed!")

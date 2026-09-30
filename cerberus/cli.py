@@ -12,6 +12,7 @@ from rich.panel import Panel
 from rich.text import Text
 from rich.prompt import Prompt
 
+from cerberus import __version__
 from cerberus.parser import CLoopParser, LoopFeature, get_ast_parser
 from cerberus.model import ProfitabilityModel, PredictionResult
 from cerberus.hardware import HardwareProfile, detect_local_hardware, PRESET_PROFILES
@@ -330,6 +331,7 @@ def list_target_profiles():
     console.print()
 
 
+@click.version_option(version=__version__, prog_name="cerberus")
 @click.command(context_settings=dict(help_option_names=['-h', '--help']))
 @click.argument('source_file', type=click.Path(exists=True), required=False)
 @click.option('-o', '--output', 'output_file', type=click.Path(), default=None,
@@ -451,20 +453,28 @@ def main(source_file: Optional[str], output_file: str, report_file: Optional[str
             params=params,
             include_tests=include_tests,
         )
-        loops = parser.parse_file(source_file, params=params)
+    if "Fallback" in hw.name and not json_output:
+        console.print("[bold yellow]WARNING: No GPU detected via OpenCL. Using fallback hardware profile.[/bold yellow]")
 
     if not loops:
         if json_output:
             print(json_lib.dumps({"source_file": source_file, "loops": [], "error": "No loops detected"}, indent=2))
+            sys.exit(1)
         else:
             console.print(f"[yellow]No loops detected in {source_file}.[/yellow]")
-        return
+            sys.exit(0)
 
     if not json_output:
         console.print(f"\n[bold]Scanned [cyan]{source_file}[/cyan]: Found [magenta]{len(loops)}[/magenta] candidate loop regions.\n[/bold]")
 
     # 4. Model Inference & Prediction
-    transformer = OpenMPTransformer(model, hw, dialect=dialect)
+    transformer = OpenMPTransformer(
+        model, hw, dialect=dialect,
+        parser_backend=parser_backend,
+        parser_params=params,
+        default_param_trip_count=parser_trip_count,
+        include_tests=include_tests,
+    )
 
     results = []
     for loop in loops:
@@ -543,7 +553,13 @@ def main(source_file: Optional[str], output_file: str, report_file: Optional[str
             show_crossover_sweep(results, model, hw, threshold, sweep_sizes, parser.bytes_per_elem)
         elif choice == "3":
             # Default to OpenMP without prompting (as per PS4)
-            transformer = OpenMPTransformer(model, hw, dialect=dialect)
+            transformer = OpenMPTransformer(
+                model, hw, dialect=dialect,
+                parser_backend=parser_backend,
+                parser_params=params,
+                default_param_trip_count=parser_trip_count,
+                include_tests=include_tests,
+            )
             default_out = f"{os.path.splitext(source_file)[0]}_offloaded.cpp"
             save_path = Prompt.ask("Save output to", default=default_out)
             if save_path.strip().lower() in ("y", "yes", ""):

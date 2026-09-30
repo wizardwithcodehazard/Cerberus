@@ -40,6 +40,9 @@ def test_clang_ast_parser_extraction():
     assert "A" in matmul.arrays_read
     assert "B" in matmul.arrays_read
     assert "C" in matmul.arrays_written
+    # 3 matrices * 4 bytes/elem * (512*512) unique working set elements = 3,145,728 bytes (~3 MB)
+    assert matmul.memory_footprint_bytes == 3 * 4 * 512 * 512
+    assert matmul.arithmetic_intensity > 10.0
 
     # 2. Reduction loop
     reduction = loops[1]

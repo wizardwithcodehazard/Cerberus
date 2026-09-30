@@ -3,22 +3,40 @@
 import re
 import copy
 from typing import List, Tuple, Optional
-from cerberus.parser import LoopFeature, CLoopParser
+from cerberus.parser import LoopFeature, get_ast_parser
 from cerberus.model import PredictionResult, ProfitabilityModel
 from cerberus.hardware import HardwareProfile
 
 class GPUPragmaTransformer:
     """Source-to-source rewriter that injects OpenMP 4.5+ or OpenACC offload pragmas on profitable loops."""
 
-    def __init__(self, model: ProfitabilityModel, target_hw: HardwareProfile, dialect: str = "openmp"):
+    def __init__(
+        self,
+        model: ProfitabilityModel,
+        target_hw: HardwareProfile,
+        dialect: str = "openmp",
+        parser_backend: str = "auto",
+        parser_params: Optional[dict] = None,
+        default_param_trip_count: int = 10000,
+        include_tests: bool = False,
+    ):
         self.model = model
         self.target_hw = target_hw
         self.dialect = dialect.lower() # "openmp" or "openacc"
+        self._parser_backend = parser_backend
+        self._parser_params = parser_params or {}
+        self._default_param_trip_count = default_param_trip_count
+        self._include_tests = include_tests
 
     def transform_source(self, source_code: str, speedup_threshold: float = 1.1) -> Tuple[str, List[Tuple[LoopFeature, PredictionResult, bool]]]:
         """Analyzes all loops in source_code and injects pragmas only for profitable ones."""
-        parser = CLoopParser()
-        loops = parser.parse_source(source_code)
+        parser = get_ast_parser(
+            backend=self._parser_backend,
+            params=self._parser_params,
+            default_param_trip_count=self._default_param_trip_count,
+            include_tests=self._include_tests,
+        )
+        loops = parser.parse_source(source_code, params=self._parser_params)
 
         lines = source_code.splitlines()
         decisions = []
