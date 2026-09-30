@@ -530,9 +530,7 @@ class ClangASTParser:
                 subscripts = re.findall(rf'\b{arr}\s*\[([^\]]+)\]', loop_source)
                 for sub in subscripts:
                     sub_clean = sub.strip()
-                    if re.search(rf'[-+*\/]\s*{re.escape(iter_var)}\b', sub_clean) or \
-                       re.search(rf'\b{re.escape(iter_var)}\s*[*\/]', sub_clean) or \
-                       (iter_var in sub_clean and re.search(r'\b[A-Z_a-z][A-Z_a-z0-9]*\s*-\s*' + re.escape(iter_var), sub_clean)):
+                    if re.search(rf'-\s*{re.escape(iter_var)}\b', sub_clean):
                         return False, f"Unsafe: Loop-carried data dependency detected on array '{arr}[{sub_clean}]' across iterations"
 
         return True, "Safe: Iteration domain is embarrassingly parallel"

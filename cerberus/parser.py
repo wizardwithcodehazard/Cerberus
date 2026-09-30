@@ -596,9 +596,7 @@ class CLoopParser:
             subscripts = re.findall(rf'\b{written_arr}\s*\[([^\]]+)\]', block)
             for sub in subscripts:
                 sub_clean = sub.strip()
-                if re.search(rf'[-+*\/]\s*{re.escape(primary_var)}\b', sub_clean) or \
-                   re.search(rf'\b{re.escape(primary_var)}\s*[*\/]', sub_clean) or \
-                   (primary_var in sub_clean and re.search(r'\b[A-Z_a-z][A-Z_a-z0-9]*\s*-\s*' + re.escape(primary_var), sub_clean)):
+                if re.search(rf'-\s*{re.escape(primary_var)}\b', sub_clean):
                     return False, f"Hazard: Loop-carried WAR / aliasing dependency detected on {written_arr}[{sub_clean}] (Cross-iteration hazard)"
 
         # 3. Check for pointer aliasing with restrict
