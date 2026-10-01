@@ -13,7 +13,8 @@ setup(
         "pandas>=2.1.0",
         "scikit-learn>=1.4.0",
         "xgboost>=2.0.0",
-        "shap>=0.44.0"
+        "shap>=0.44.0",
+        "libclang>=16.0.0",
     ],
     entry_points={
         "console_scripts": [

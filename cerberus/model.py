@@ -327,12 +327,13 @@ class ProfitabilityModel:
         neg_factors = sorted([(k, v) for k, v in shap_dict.items() if v < 0], key=lambda x: x[1])
 
         explanation = self._generate_explanation(is_profitable, predicted_speedup, ci_lower, ci_upper, shap_dict, loop, hw, roofline)
-        confidence = min(0.99, max(0.55, abs(log_speedup_pred) / (abs(log_speedup_pred) + 1.0)))
+        # Decision strength / classification margin heuristic (ranges from 0.55 near boundary to 0.99 on strong signals)
+        decision_strength = min(0.99, max(0.55, abs(log_speedup_pred) / (abs(log_speedup_pred) + 1.0)))
 
         return PredictionResult(
             is_profitable=is_profitable,
             predicted_speedup=predicted_speedup,
-            confidence=confidence,
+            confidence=decision_strength,
             roofline=roofline,
             primary_explanation=explanation,
             top_positive_factors=[(FEATURE_LABELS.get(k, k), v) for k, v in pos_factors[:3]],
@@ -371,12 +372,22 @@ class ProfitabilityModel:
                 "classifier": self.classifier,
                 "regressor": self.regressor,
                 "model": self.regressor if self.regressor is not None else self.model,
-                "metadata": self.metadata
+                "metadata": self.metadata,
+                "feature_names": FEATURE_NAMES,
+                "version": "0.1.0"
             }, f)
 
     def load(self, filepath: str):
         with open(filepath, 'rb') as f:
             data = pickle.load(f)
+            saved_features = data.get("feature_names")
+            if saved_features and saved_features != FEATURE_NAMES:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "Feature schema mismatch in %s: model artifact features != current schema (%d vs %d). "
+                    "Please retrain with scripts/train_model.py.", filepath, len(saved_features), len(FEATURE_NAMES)
+                )
+
             self.classifier = data.get("classifier")
             self.regressor = data.get("regressor", data.get("model"))
             self.model = self.regressor

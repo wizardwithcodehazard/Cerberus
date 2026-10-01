@@ -380,6 +380,7 @@ def main(source_file: Optional[str], output_file: str, report_file: Optional[str
     global console
     if quiet:
         console = Console(quiet=True)
+    error_console = Console(stderr=True)
 
     # Handle --list-targets early exit
     if list_targets:
@@ -387,7 +388,7 @@ def main(source_file: Optional[str], output_file: str, report_file: Optional[str
         return
 
     if not source_file:
-        console.print("[bold red]Error: SOURCE_FILE argument is required (unless using --list-targets).[/bold red]")
+        error_console.print("[bold red]Error: SOURCE_FILE argument is required (unless using --list-targets).[/bold red]")
         sys.exit(1)
 
     # Parse parameter overrides
@@ -506,22 +507,9 @@ def main(source_file: Optional[str], output_file: str, report_file: Optional[str
     else:
         sweep_sizes = [100, 1000, 10000, 100000, 1000000, 10000000]
 
-    # Batch mode — scan, inject, report, exit (no interactive menu)
-    if batch:
-        if explain:
-            show_explanations(results)
-        if sweep:
-            show_crossover_sweep(results, model, hw, threshold, sweep_sizes, parser.bytes_per_elem)
-        if audit_loop_idx is not None and 1 <= audit_loop_idx <= len(results):
-            loop, pred = results[audit_loop_idx - 1]
-            show_loop_audit(loop, pred, hw, audit_loop_idx)
-        # Always inject in batch mode
-        inject_and_save(source_file, transformer, results, hw, model, threshold, output_file, dialect=dialect)
-        return
-
-    # If non-interactive batch flags were provided, execute them and exit
-    has_flags = output_file or explain or sweep or (audit_loop_idx is not None)
-    if has_flags:
+    # Non-interactive / batch mode or headless environment (CI, Docker, pipes)
+    is_non_interactive = batch or not sys.stdin.isatty() or bool(output_file or explain or sweep or (audit_loop_idx is not None))
+    if is_non_interactive:
         if audit_loop_idx is not None and 1 <= audit_loop_idx <= len(results):
             loop, pred = results[audit_loop_idx - 1]
             show_loop_audit(loop, pred, hw, audit_loop_idx)
@@ -529,7 +517,7 @@ def main(source_file: Optional[str], output_file: str, report_file: Optional[str
             show_crossover_sweep(results, model, hw, threshold, sweep_sizes, parser.bytes_per_elem)
         if explain:
             show_explanations(results)
-        if output_file:
+        if output_file or batch:
             inject_and_save(source_file, transformer, results, hw, model, threshold, output_file, dialect=dialect)
         return
 

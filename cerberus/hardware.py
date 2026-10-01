@@ -18,7 +18,8 @@ logger = logging.getLogger(__name__)
 AVX2_FMA_FLOPS_PER_CYCLE = 16       # 256-bit FMA: 8 FP32 * 2 ops (fused mul+add)
 AVX512_FLOPS_PER_CYCLE = 32         # 512-bit FMA: 16 FP32 * 2 ops
 SSE_FLOPS_PER_CYCLE = 8             # 128-bit SSE: 4 FP32 * 2 ops
-DEFAULT_FLOPS_PER_CYCLE = 16        # Conservative default (AVX2 assumed)
+ARM_NEON_FLOPS_PER_CYCLE = 16       # 128-bit dual-issue NEON FMA: 4 FP32 * 2 ops * 2 pipes (Apple Silicon / Graviton)
+DEFAULT_FLOPS_PER_CYCLE = 16        # Conservative default (AVX2 / NEON assumed)
 
 # PCIe Interconnect theoretical peak bandwidths (GB/s, bidirectional per direction)
 PCIE_GEN3_X16_BW_GBPS = 15.75
@@ -248,6 +249,10 @@ PRESET_PROFILES = {
 def _detect_cpu_isa() -> int:
     """Detects CPU SIMD ISA capability and returns FLOPs per cycle per core."""
     try:
+        mach = platform.machine().lower()
+        if mach in ("arm64", "aarch64", "armv8"):
+            return ARM_NEON_FLOPS_PER_CYCLE
+
         if platform.system() == "Windows":
             cmd = ["powershell", "-NoProfile", "-Command",
                    "Get-CimInstance Win32_Processor | Select-Object -ExpandProperty Name"]
@@ -272,6 +277,17 @@ def _detect_cpu_isa() -> int:
                         elif "sse4" in line.lower():
                             return SSE_FLOPS_PER_CYCLE
                         break
+        elif platform.system() == "Darwin":
+            try:
+                res = subprocess.run(["sysctl", "-n", "machdep.cpu.features", "machdep.cpu.leaf7_features"],
+                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2)
+                feats = res.stdout.lower()
+                if "avx512" in feats:
+                    return AVX512_FLOPS_PER_CYCLE
+                elif "avx2" in feats:
+                    return AVX2_FMA_FLOPS_PER_CYCLE
+            except Exception:
+                pass
     except Exception:
         pass
     return DEFAULT_FLOPS_PER_CYCLE
@@ -303,6 +319,13 @@ def detect_host_cpu() -> Tuple[str, float]:
                     if "model name" in line:
                         cpu_name = line.split(":", 1)[1].strip()
                         break
+        elif platform.system() == "Darwin":
+            try:
+                res = subprocess.run(["sysctl", "-n", "machdep.cpu.brand_string"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2)
+                if res.returncode == 0 and res.stdout.strip():
+                    cpu_name = res.stdout.strip()
+            except Exception:
+                pass
     except Exception:
         pass
 
@@ -315,16 +338,17 @@ def _resolve_dynamic_gpu_name(raw_name: str) -> str:
     """Dynamically resolves internal driver codenames (e.g. gfx1035) to OS commercial display names."""
     if not raw_name.lower().startswith("gfx"):
         return raw_name
-    try:
-        cmd = ["powershell", "-NoProfile", "-Command", "Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name"]
-        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2)
-        if res.returncode == 0 and res.stdout.strip():
-            for line in res.stdout.strip().splitlines():
-                clean = line.strip()
-                if clean and "basic" not in clean.lower():
-                    return f"{clean} ({raw_name})"
-    except Exception:
-        pass
+    if platform.system() == "Windows":
+        try:
+            cmd = ["powershell", "-NoProfile", "-Command", "Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name"]
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2)
+            if res.returncode == 0 and res.stdout.strip():
+                for line in res.stdout.strip().splitlines():
+                    clean = line.strip()
+                    if clean and "basic" not in clean.lower():
+                        return f"{clean} ({raw_name})"
+        except Exception:
+            pass
     return raw_name
 
 def _get_vendor_shader_multiplier(dev_name: str, raw_name: str) -> int:
@@ -398,7 +422,14 @@ def _query_live_opencl_hardware(cpu_name: str, cpu_tflops: float, preferred_vend
         try:
             cl = ctypes.windll.LoadLibrary("OpenCL.dll")
         except Exception:
-            cl = ctypes.cdll.LoadLibrary("libOpenCL.so")
+            try:
+                cl = ctypes.cdll.LoadLibrary("libOpenCL.so")
+            except Exception:
+                # macOS OpenCL framework support
+                try:
+                    cl = ctypes.cdll.LoadLibrary("/System/Library/Frameworks/OpenCL.framework/OpenCL")
+                except Exception:
+                    return None
 
         # Khronos Standard OpenCL ABI Constants (Universal across Intel, NVIDIA, AMD, Apple, ARM)
         CL_PLATFORM_NAME = 0x0902
@@ -518,18 +549,19 @@ def _query_live_opencl_hardware(cpu_name: str, cpu_tflops: float, preferred_vend
 
 def _query_live_system_ram_bandwidth() -> float:
     """Queries live physical RAM clock speed and bus width via Windows WMI."""
-    try:
-        cmd = ["powershell", "-NoProfile", "-Command", 
-               "Get-CimInstance Win32_PhysicalMemory | Measure-Object -Property ConfiguredClockSpeed -Average | Select-Object -ExpandProperty Average"]
-        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2)
-        if res.returncode == 0 and res.stdout.strip():
-            speed_mhz = float(res.stdout.strip().splitlines()[0])
-            # Dual channel 64-bit bus (128 bits total = 16 bytes per cycle)
-            bandwidth_gbps = round((speed_mhz * 1e6 * 16) / 1e9, 1)
-            if 10.0 <= bandwidth_gbps <= 200.0:
-                return bandwidth_gbps
-    except Exception:
-        pass
+    if platform.system() == "Windows":
+        try:
+            cmd = ["powershell", "-NoProfile", "-Command", 
+                   "Get-CimInstance Win32_PhysicalMemory | Measure-Object -Property ConfiguredClockSpeed -Average | Select-Object -ExpandProperty Average"]
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2)
+            if res.returncode == 0 and res.stdout.strip():
+                speed_mhz = float(res.stdout.strip().splitlines()[0])
+                # Dual channel 64-bit bus (128 bits total = 16 bytes per cycle)
+                bandwidth_gbps = round((speed_mhz * 1e6 * 16) / 1e9, 1)
+                if 10.0 <= bandwidth_gbps <= 200.0:
+                    return bandwidth_gbps
+        except Exception:
+            pass
     return DEFAULT_SYSTEM_RAM_BW_GBPS
 
 def detect_local_hardware(preferred_vendor: Optional[str] = None) -> HardwareProfile:
@@ -542,62 +574,91 @@ def detect_local_hardware(preferred_vendor: Optional[str] = None) -> HardwarePro
         return live_profile
 
     # 2. Query Windows Video Controllers via PowerShell CIM / WMI
-    try:
-        cmd = ["powershell", "-NoProfile", "-Command", "Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name"]
-        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2)
-        if res.returncode == 0 and res.stdout.strip():
-            gpu_names = [line.strip() for line in res.stdout.strip().splitlines() if line.strip()]
-            for name in gpu_names:
-                if "basic" in name.lower() or "microsoft" in name.lower():
-                    continue
+    if platform.system() == "Windows":
+        try:
+            cmd = ["powershell", "-NoProfile", "-Command", "Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name"]
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2)
+            if res.returncode == 0 and res.stdout.strip():
+                gpu_names = [line.strip() for line in res.stdout.strip().splitlines() if line.strip()]
+                for name in gpu_names:
+                    if "basic" in name.lower() or "microsoft" in name.lower():
+                        continue
 
-                # Look up specs from comprehensive model table
-                specs = _lookup_gpu_specs(name)
-                if specs:
-                    peak_tflops, dev_type, is_unified = specs
-                    if is_unified:
-                        ram_bw = _query_live_system_ram_bandwidth()
-                        bus_bw = ram_bw if ram_bw > 0 else DEFAULT_SYSTEM_RAM_BW_GBPS
-                    else:
-                        bus_bw = _query_pcie_bandwidth(name)
-                    
-                    type_code = 0 if dev_type == "igpu" else (2 if dev_type == "egpu" else 1)
-                    return HardwareProfile(
-                        name=name,
-                        device_type=dev_type,
-                        type_code=type_code,
-                        bus_bandwidth_gbps=bus_bw,
-                        peak_tflops=peak_tflops,
-                        unified_memory=is_unified,
-                        cpu_name=cpu_name,
-                        cpu_tflops=cpu_tflops
-                    )
+                    # Look up specs from comprehensive model table
+                    specs = _lookup_gpu_specs(name)
+                    if specs:
+                        peak_tflops, dev_type, is_unified = specs
+                        if is_unified:
+                            ram_bw = _query_live_system_ram_bandwidth()
+                            bus_bw = ram_bw if ram_bw > 0 else DEFAULT_SYSTEM_RAM_BW_GBPS
+                        else:
+                            bus_bw = _query_pcie_bandwidth(name)
+                        
+                        type_code = 0 if dev_type == "igpu" else (2 if dev_type == "egpu" else 1)
+                        return HardwareProfile(
+                            name=name,
+                            device_type=dev_type,
+                            type_code=type_code,
+                            bus_bandwidth_gbps=bus_bw,
+                            peak_tflops=peak_tflops,
+                            unified_memory=is_unified,
+                            cpu_name=cpu_name,
+                            cpu_tflops=cpu_tflops
+                        )
 
-                # No model match — classify by vendor with conservative estimate
-                name_lower = name.lower()
-                if any(kw in name_lower for kw in ("geforce", "nvidia", "rtx", "gtx")):
-                    pcie_bw = _query_pcie_bandwidth(name)
-                    return HardwareProfile(
-                        name=name, device_type="dgpu", type_code=1,
-                        bus_bandwidth_gbps=pcie_bw, peak_tflops=UNKNOWN_GPU_TFLOPS,
-                        unified_memory=False, cpu_name=cpu_name, cpu_tflops=cpu_tflops
-                    )
-                elif any(kw in name_lower for kw in ("radeon", "amd")):
-                    ram_bw = _query_live_system_ram_bandwidth()
-                    return HardwareProfile(
-                        name=name, device_type="igpu", type_code=0,
-                        bus_bandwidth_gbps=ram_bw if ram_bw > 0 else DEFAULT_SYSTEM_RAM_BW_GBPS,
-                        peak_tflops=UNKNOWN_GPU_TFLOPS, unified_memory=True,
-                        cpu_name=cpu_name, cpu_tflops=cpu_tflops
-                    )
-                elif any(kw in name_lower for kw in ("intel", "iris", "uhd", "xe")):
-                    return HardwareProfile(
-                        name=name, device_type="igpu", type_code=0,
-                        bus_bandwidth_gbps=64.0, peak_tflops=UNKNOWN_GPU_TFLOPS,
-                        unified_memory=True, cpu_name=cpu_name, cpu_tflops=cpu_tflops
-                    )
-    except Exception:
-        pass
+                    # No model match — classify by vendor with conservative estimate
+                    name_lower = name.lower()
+                    if any(kw in name_lower for kw in ("geforce", "nvidia", "rtx", "gtx")):
+                        pcie_bw = _query_pcie_bandwidth(name)
+                        return HardwareProfile(
+                            name=name,
+                            device_type="dgpu",
+                            type_code=1,
+                            bus_bandwidth_gbps=pcie_bw,
+                            peak_tflops=6.0,
+                            unified_memory=False,
+                            cpu_name=cpu_name,
+                            cpu_tflops=cpu_tflops
+                        )
+                    elif any(kw in name_lower for kw in ("radeon", "amd", "intel", "iris", "arc", "graphics")):
+                        return HardwareProfile(
+                            name=name,
+                            device_type="igpu",
+                            type_code=0,
+                            bus_bandwidth_gbps=DEFAULT_SYSTEM_RAM_BW_GBPS,
+                            peak_tflops=2.5,
+                            unified_memory=True,
+                            cpu_name=cpu_name,
+                            cpu_tflops=cpu_tflops
+                        )
+        except Exception:
+            pass
+
+    # 3. Query macOS Display Hardware via system_profiler
+    elif platform.system() == "Darwin":
+        try:
+            res = subprocess.run(["system_profiler", "SPDisplaysDataType"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2)
+            if res.returncode == 0 and res.stdout.strip():
+                for line in res.stdout.splitlines():
+                    if "Chipset Model:" in line:
+                        gpu_name = line.split(":", 1)[1].strip()
+                        specs = _lookup_gpu_specs(gpu_name)
+                        if specs:
+                            peak_tflops, dev_type, is_unified = specs
+                            bus_bw = 100.0 if is_unified else 15.75
+                            type_code = 0 if dev_type == "igpu" else 1
+                            return HardwareProfile(
+                                name=gpu_name,
+                                device_type=dev_type,
+                                type_code=type_code,
+                                bus_bandwidth_gbps=bus_bw,
+                                peak_tflops=peak_tflops,
+                                unified_memory=is_unified,
+                                cpu_name=cpu_name,
+                                cpu_tflops=cpu_tflops
+                            )
+        except Exception:
+            pass
 
     # Fallback default with detected host CPU
     logger.warning("No GPU detected, using fallback profile")

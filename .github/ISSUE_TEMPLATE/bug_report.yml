@@ -1,0 +1,40 @@
+name: Bug Report
+description: File a bug report or incorrect offload decision in Cerberus
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug report! Please provide as much detail as possible to help reproduce the issue.
+  - type: input
+    id: environment
+    attributes:
+      label: Environment Info
+      description: OS version, Python version, GPU model, and OpenCL runtime
+      placeholder: "e.g. Ubuntu 22.04 / Windows 11, Python 3.11, NVIDIA RTX 4070 (CUDA 12.4)"
+    validations:
+      required: true
+  - type: textarea
+    id: loop_snippet
+    attributes:
+      label: C/C++ Loop Code Snippet
+      description: The loop structure or file where the issue occurred
+      render: c
+    validations:
+      required: true
+  - type: textarea
+    id: command_run
+    attributes:
+      label: Command Run
+      description: Full CLI command line executed
+      placeholder: "cerberus loop.cpp --explain"
+    validations:
+      required: true
+  - type: textarea
+    id: expected_behavior
+    attributes:
+      label: Expected vs. Actual Behavior
+      description: What did you expect Cerberus to predict/synthesize, and what actually happened?
+    validations:
+      required: true

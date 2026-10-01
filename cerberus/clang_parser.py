@@ -380,11 +380,14 @@ class ClangASTParser:
         return None
 
     def _count_flops_in_body(self, loop_cursor: clang.cindex.Cursor) -> int:
-        """Counts arithmetic operations (FLOPs) inside the loop body AST."""
+        """Counts arithmetic operations (FLOPs) strictly inside the loop body AST, excluding loop header tokens."""
+        children = list(loop_cursor.get_children())
+        body_cursor = children[-1] if children else loop_cursor
+
         flops = 0
-        for token in loop_cursor.get_tokens():
+        for token in body_cursor.get_tokens():
             spelling = token.spelling
-            if spelling in ("+", "-", "*", "/", "%", "+=", "-=", "*=", "/="):
+            if spelling in ARITHMETIC_OPS:
                 flops += 1
             elif spelling in MATH_INTRINSICS:
                 flops += MATH_INTRINSICS[spelling]

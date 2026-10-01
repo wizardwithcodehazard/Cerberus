@@ -1,0 +1,28 @@
+name: Feature Request
+description: Propose a new feature, hardware target, or optimization heuristic for Cerberus
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Have an idea or architectural improvement for Cerberus? Let us know!
+  - type: textarea
+    id: problem_description
+    attributes:
+      label: Problem or Motivation
+      description: Is your feature request related to a specific optimization bottleneck or missing hardware target?
+    validations:
+      required: true
+  - type: textarea
+    id: proposed_solution
+    attributes:
+      label: Proposed Solution / Behavior
+      description: Describe how the feature should work from a compiler/CLI/API perspective.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives_considered
+    attributes:
+      label: Alternatives Considered
+      description: Any alternative approaches or workarounds you've explored.
