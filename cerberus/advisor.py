@@ -191,3 +191,8 @@ class AILoopAdvisor:
                 f"    // Kernel body\n"
                 f"}}"
             )
+
+
+__all__ = [
+    "AILoopAdvisor",
+]

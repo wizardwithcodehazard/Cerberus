@@ -346,3 +346,9 @@ class OpenCLEngine:
 
 def sizeof(obj):
     return ctypes.sizeof(obj)
+
+
+__all__ = [
+    "NativeOpenCLRunner",
+    "GPUExecutionProfile",
+]

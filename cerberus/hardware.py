@@ -672,3 +672,17 @@ def detect_local_hardware(preferred_vendor: Optional[str] = None) -> HardwarePro
         cpu_name=cpu_name,
         cpu_tflops=cpu_tflops
     )
+
+
+__all__ = [
+    "HardwareProfile",
+    "PRESET_PROFILES",
+    "detect_local_hardware",
+    "detect_host_cpu",
+    "GPU_MODEL_SPECS",
+    "AVX2_FMA_FLOPS_PER_CYCLE",
+    "AVX512_FLOPS_PER_CYCLE",
+    "SSE_FLOPS_PER_CYCLE",
+    "ARM_NEON_FLOPS_PER_CYCLE",
+    "DEFAULT_FLOPS_PER_CYCLE",
+]

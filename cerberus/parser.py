@@ -1,4 +1,9 @@
-"""AST Loop Feature Extractor for C and C++ Source Code."""
+"""AST Loop Feature Extractor for C and C++ Source Code.
+
+Provides the native regex/AST fallback parser (`CLoopParser`) and unified `LoopFeature` schema.
+For modern C++ constructs (range-for, do-while, complex template headers), use the primary
+`ClangASTParser` backend (`get_ast_parser(backend='clang')`).
+"""
 
 import re
 from dataclasses import dataclass
@@ -683,3 +688,13 @@ def get_ast_parser(
         params=params,
         include_tests=include_tests,
     )
+
+
+__all__ = [
+    "LoopFeature",
+    "CLoopParser",
+    "get_ast_parser",
+    "DEFAULT_TRIP_COUNT",
+    "MIN_FOOTPRINT_BYTES",
+    "GEMM_FLOPS_PER_ITER",
+]

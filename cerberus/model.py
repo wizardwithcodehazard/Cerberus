@@ -401,3 +401,15 @@ class ProfitabilityModel:
                 self.metadata = {"is_stale": True}
             self.explainer = shap.TreeExplainer(self.regressor)
 
+
+__all__ = [
+    "ProfitabilityModel",
+    "PredictionResult",
+    "RooflineBound",
+    "compute_roofline_bound",
+    "engineer_features",
+    "FEATURE_NAMES",
+    "BASE_FEATURE_NAMES",
+    "FEATURE_LABELS",
+]
+

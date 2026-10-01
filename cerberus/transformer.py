@@ -27,6 +27,7 @@ class GPUPragmaTransformer:
         self._parser_params = parser_params or {}
         self._default_param_trip_count = default_param_trip_count
         self._include_tests = include_tests
+        self._crossover_cache: dict = {}
 
     def transform_source(self, source_code: str, speedup_threshold: float = 1.1) -> Tuple[str, List[Tuple[LoopFeature, PredictionResult, bool]]]:
         """Analyzes all loops in source_code and injects pragmas only for profitable ones."""
@@ -60,8 +61,21 @@ class GPUPragmaTransformer:
 
     def find_crossover_threshold(self, loop: LoopFeature) -> Optional[int]:
         """Calculates the minimum problem size N where GPU offloading becomes profitable (Speedup >= 1.05x)."""
+        cache_key = (
+            loop.nesting_depth,
+            loop.flops_per_iter,
+            round(loop.coalescing_efficiency, 2),
+            round(loop.stride_regularity, 2),
+            len(loop.arrays_read),
+            len(loop.arrays_written),
+            self.target_hw.name,
+        )
+        if cache_key in self._crossover_cache:
+            return self._crossover_cache[cache_key]
+
         test_sizes = [32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 1048576]
         
+        crossover_n = None
         for sz in test_sizes:
             scaled = copy.copy(loop)
             if loop.nesting_depth >= 3:
@@ -84,9 +98,11 @@ class GPUPragmaTransformer:
 
             pred = self.model.predict_loop(scaled, self.target_hw, speedup_threshold=1.05)
             if pred.is_profitable:
-                return sz
+                crossover_n = sz
+                break
 
-        return None
+        self._crossover_cache[cache_key] = crossover_n
+        return crossover_n
 
     def _get_dynamic_bound_var(self, loop: LoopFeature) -> Optional[str]:
         """Extracts dynamic variable bound from loop header (e.g. 'N' in 'for (int i = 0; i < N; ++i)')."""
@@ -187,4 +203,6 @@ class GPUPragmaTransformer:
 
 # Backward-compatibility alias
 OpenMPTransformer = GPUPragmaTransformer
+
+__all__ = ["GPUPragmaTransformer", "OpenMPTransformer"]
 

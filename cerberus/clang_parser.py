@@ -631,3 +631,10 @@ class ClangASTParser:
             or name_lower.startswith("verify")
             or name_lower.startswith("benchmark")
         )
+
+
+__all__ = [
+    "ClangASTParser",
+    "MATH_INTRINSICS",
+    "ARITHMETIC_OPS",
+]

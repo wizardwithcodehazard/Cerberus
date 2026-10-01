@@ -68,6 +68,13 @@ The model uses a two-stage hurdle approach with monotonicity constraints on tota
 
 ---
 
+## Modeling Assumptions & Constraints
+
+- **Steady-State Dispatch vs. Cold-Start JIT Compilation:** The model measures and predicts steady-state execution with physical hardware launch latencies ($5\text{--}50\,\mu\text{s}$). Cold-start OpenCL/CUDA JIT kernel compilation on initial program launch ($50\text{--}500\text{ ms}$) is amortized over repeated kernel invocations.
+- **Hardware Occupancy & Grid Saturation:** On large GPUs ($4000+$ ALUs), loops with small trip counts under-occupy the hardware. The Cerberus Pragma Transformer addresses this by synthesizing parametric dynamic guards (`#pragma omp ... if(N >= crossover)`) so execution automatically falls back to CPU when $N$ is below the saturation threshold.
+
+---
+
 ## Reproducibility & Retraining
 
 To retrain the production model artifact:
